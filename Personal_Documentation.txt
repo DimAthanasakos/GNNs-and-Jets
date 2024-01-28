@@ -1,0 +1,11 @@
+To Do list :
+
+    ParticleNet:
+
+        -   ParticleNet only supports qvsg at particle level for now, which we load from the energy flow package. It's easy to extend to ZvsQCD in the future. 
+        -   For the 7dim representation (Original ParticleNet feature space) I have not paid attention to the jet normalization procedure. We need to be careful, it might 
+            significantly improve performance 
+        -   I have only done tests on the ParticleNetLite. Might be useful to also run the full ParticleNet nn 
+        
+
+

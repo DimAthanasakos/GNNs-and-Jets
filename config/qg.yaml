@@ -1,0 +1,89 @@
+# Config file for jet classification
+
+#------------------------------------------------------------------
+# Note: We will read processing parameters from the loaded file, 
+# rather than from this config file.
+# See subjets_unshuffled.h5 and subjet_graphs.h5 for the set
+# of parameters that are read from the loaded file.
+#------------------------------------------------------------------
+
+#------------------------------------------------------------------
+# These following parameters are used only in ML analysis
+#------------------------------------------------------------------
+
+# Size of labeled data to load (i.e. number of jets)
+n_train: 40000
+n_val:   5000
+n_test:  5000
+
+# Which subjet collections to use
+subjet_basis: 'inclusive'
+r: [0.05]
+
+# Classification labels
+label_0: 'gluon'
+label_1: 'quark'
+
+# Select model: particle_gcn_pytorch, particle_gat_pytorch, subjet_gcn_pytorch, subjet_gat_pytorch,
+#               particle_gcn_jax, particle_net, particle_net_laman 
+models: ['particle_net_laman']
+
+
+particle_net:
+    graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used
+    batch_size: 512
+    epochs: 10
+    learning_rate: 0.001
+    three_momentum_features: True # if True, use the three momentum features (pt, eta, phi) as input features for the PN. Else, use the original 7dim feature space.
+    original_train_parameters: False # if True, use the original training parameters from the paper https://arxiv.org/abs/1902.08570. So far the best hyperparameters for the particle_net model
+
+particle_net_laman:
+    graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used
+    batch_size: 512
+    epochs: 10
+    learning_rate: 0.001
+    three_momentum_features: True # This has to be True. If set to False, it will be overwritten to True.
+    original_train_parameters: False # if True, use the original training parameters from the paper https://arxiv.org/abs/1902.08570. So far the best hyperparameters for the particle_net model
+
+
+particle_gcn_jax:
+    graph_types: ['fully_connected']
+    edge_features: False
+    hidden_dim: 64
+    batch_size: 1
+    epochs: 2
+    learning_rate: 0.001
+
+particle_gcn_pytorch:
+    graph_types: ['fully_connected']
+    edge_features: False
+    hidden_dim: 64
+    batch_size: 128
+    epochs: 10
+    learning_rate: 0.001
+
+particle_gat_pytorch:
+    graph_types: ['fully_connected']
+    edge_features: False
+    hidden_dim: 8
+    n_heads: 8
+    batch_size: 128
+    epochs: 10
+    learning_rate: 0.001
+
+subjet_gcn_pytorch:
+    graph_types: ['laman_naive', 'laman_1N', 'laman_1N2N']
+    edge_features: False
+    hidden_dim: 64
+    batch_size: 128
+    epochs: 5
+    learning_rate: 0.001
+
+subjet_gat_pytorch:
+    graph_types: ['laman_naive', 'laman_1N', 'laman_1N2N']
+    edge_features: True
+    hidden_dim: 8
+    n_heads: 8
+    batch_size: 128
+    epochs: 5    
+    learning_rate: 0.001
