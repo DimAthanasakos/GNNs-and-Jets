@@ -8,4 +8,8 @@ To Do list :
         -   I have only done tests on the ParticleNetLite. Might be useful to also run the full ParticleNet nn 
         
 
+    Transformer: 
+
+        -   Pass (pt, eta, phi) to the Transformer instead of doing (pt, eta, phi) -> (px, py, pz, e) in the models script and then reversing it in the architecture script 
+            This is relevant for the pairwise interaction features function. The input features of each individual particle accepts all forms.
 

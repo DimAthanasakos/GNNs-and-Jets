@@ -15,7 +15,7 @@ import torch
 sys.path.append('.')
 from base import common_base
 import data_IO
-from analysis.models import gnn_pytorch, particle_net
+from analysis.models import gnn_pytorch, particle_net, particle_transformer 
 
 
 ################################################################
@@ -118,23 +118,19 @@ class MLAnalysis(common_base.CommonBase):
                     model_info_temp['graph_key'] = graph_key
                     self.AUC[model_key], self.roc_curve_dict[model_key] = gnn_pytorch.GNN_PyTorch(model_info_temp).train()
 
-            if model in ['particle_gcn_jax']:
-                for graph_type in model_settings['graph_types']:
-                    model_key = f'{model}__{graph_type}'
-                    graph_key = f'particle__{graph_type}'
-                    print(f'model_key: {model_key}')
-                    model_info_temp = model_info.copy()
-                    model_info_temp['graph_type'] = graph_type
-                    model_info_temp['model_key'] = model_key
-                    model_info_temp['graph_key'] = graph_key
-                    self.AUC[model_key], self.roc_curve_dict[model_key] = gnn_jax.GNN_JAX(model_info_temp).train()
-
             if model in ['particle_net', 'particle_net_laman']: 
                 model_key = f'{model}'
                 print(f'model_key: {model_key}')
                 model_info_temp = model_info.copy()
                 model_info_temp['model_key'] = model_key
                 self.AUC[model_key], self.roc_curve_dict[model_key] = particle_net.ParticleNet(model_info_temp).train()
+
+            if model in ['particle_transformer']:
+                model_key = f'{model}'
+                print(f'model_key: {model_key}')
+                model_info_temp = model_info.copy()
+                model_info_temp['model_key'] = model_key
+                self.AUC[model_key], self.roc_curve_dict[model_key] = particle_transformer.ParT(model_info_temp).train()
 
 
             # ---------- Input: Subjet four-vectors ----------

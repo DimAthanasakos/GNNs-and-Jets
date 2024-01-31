@@ -90,25 +90,23 @@ class ParticleNet():
         # Preprocess by centering jets and normalizing pts
         if self.three_momentum_features:                 # Preprocess the jets to create the three_momentum_features for ParticleNet 
             input_dims = 3
-            for x_PFN in self.X_PN:
-                mask = x_PFN[:,0] > 0
-                yphi_avg = np.average(x_PFN[mask,1:3], weights=x_PFN[mask,0], axis=0)
-                x_PFN[mask,1:3] -= yphi_avg
-                x_PFN[mask,0] /= x_PFN[:,0].sum()
+            for x_PN in self.X_PN:
+                mask = x_PN[:,0] > 0
+                yphi_avg = np.average(x_PN[mask,1:3], weights=x_PN[mask,0], axis=0)
+                x_PN[mask,1:3] -= yphi_avg
+                x_PN[mask,0] /= x_PN[:,0].sum()
 
             # Change the order of the features from (pt, eta, phi, pid) to (eta, phi, pt, pid) because (eta, phi) are common for both representations
             # So the convention for the order is: (eta, phi, ...) 
-            
-            temp = self.X_PN.copy()
-            self.X_PN[:,:,0] = temp[:,:,1]
-            self.X_PN[:,:,1] = temp[:,:,2]
-            self.X_PN[:,:,2] = temp[:,:,0]
+            self.X_PN[:,:, [0, 1, 2]] = self.X_PN[:,:, [1, 2, 0]]
 
             # Ignore the PID features and use the array features = (eta, phi, pt) as input features for ParticleNet
             features = self.X_PN[:,:,:3]  
 
         # Preprocess the jets to create the original features for ParticleNet (7 in total)
         else:
+            
+            # TO DO: Check if the functions from architecture.ParticleTransformer can be used here to make this more readable
 
             # Get the four-momentum (E, px, py, pz) from the (pt, eta, phi, pid) features
             p_4momentum = energyflow.p4s_from_ptyphipids(self.X_PN, error_on_unknown = True)
@@ -307,7 +305,6 @@ class ParticleNet():
             print()
             print()
         
-        # We're missing the roc curve. 
         return auc_test, roc_test
 
         
@@ -339,10 +336,9 @@ class ParticleNet():
             loss.backward()
             optimizer.step()
 
-            try:
-                scheduler.step()
-            except:
-                pass
+            # this will run only for the original_train parameters where we have a variable learning rate
+            try: scheduler.step()
+            except: pass
  
             loss_cum += loss.item()
             # Cache management
@@ -356,7 +352,6 @@ class ParticleNet():
     def _test_particlenet(self, test_loader, particlenet_model):
         particlenet_model.eval()
 
-        auc_particlenet = 0
         correct = 0
         tot_datapoints = 0
 

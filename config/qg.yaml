@@ -12,9 +12,9 @@
 #------------------------------------------------------------------
 
 # Size of labeled data to load (i.e. number of jets)
-n_train: 40000
-n_val:   5000
-n_test:  5000
+n_train: 4000
+n_val:   500
+n_test:  500
 
 # Which subjet collections to use
 subjet_basis: 'inclusive'
@@ -25,12 +25,17 @@ label_0: 'gluon'
 label_1: 'quark'
 
 # Select model: particle_gcn_pytorch, particle_gat_pytorch, subjet_gcn_pytorch, subjet_gat_pytorch,
-#               particle_gcn_jax, particle_net, particle_net_laman 
-models: ['particle_net_laman']
+#               particle_gcn_jax, particle_net, particle_net_laman, particle_transformer
+models: ['particle_transformer']
 
+particle_transformer:
+    graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
+    batch_size: 512
+    epochs: 15
+    learning_rate: 0.001
 
 particle_net:
-    graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used
+    graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used as input. The graph is constructed in the architecture script
     batch_size: 512
     epochs: 10
     learning_rate: 0.001
