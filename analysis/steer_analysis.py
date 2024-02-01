@@ -46,7 +46,9 @@ class SteerAnalysis(common_base.CommonBase):
         print('Initializing class objects')
 
         with open(config_file, 'r') as stream:
-            config = yaml.safe_load(stream)
+            self.config = yaml.safe_load(stream)
+        self.models = self.config['models']
+        #self.graph_types = config['graph_types']
 
     #---------------------------------------------------------------
     # Main function
@@ -65,15 +67,37 @@ class SteerAnalysis(common_base.CommonBase):
           - graphs_pyg_particle__{graph_key}.pt: builds PyG graphs from energyflow dataset
         '''
 
-        # Check whether the graphs file has already been generated, and if not, generate it
-        graph_numpy_subjet_file = os.path.join(self.output_dir, 'graphs_numpy_subjet.h5')
-        print('========================================================================')
-        if self.regenerate_graphs or not os.path.exists(graph_numpy_subjet_file):
-            input_data = data_IO.read_data(self.input_file)
-            graph_constructor.construct_graphs(input_data, self.config_file, self.output_dir, self.use_precomputed_graphs)
-        else:
-            print(f'Subjet numpy graphs found: {graph_numpy_subjet_file}')
+        # If you want to use subjets instead of hadrons, we also need an input file to read the subjets from.
+        # If so, the input file must be one of the files in the google spreadsheet: https://docs.google.com/spreadsheets/d/1DI_GWwZO8sYDB9FS-rFzitoDk3SjfHfgoKVVGzG1j90/edit#gid=0
+        
+        for model in self.models:
+            if model in ['subjet_gcn_pytorch', 'subjet_gat_pytorch'] and self.input_file: 
+                # Check whether the graphs file has already been generated, and if not, generate it
+                # TODO: This is a bit of a hack, but it works for now. We also need to add a check for the pyg graphs.
+                graph_numpy_subjet_file = os.path.join(self.output_dir, 'graphs_numpy_subjet.h5') 
+                print('========================================================================')
+                if self.regenerate_graphs or not os.path.exists(graph_numpy_subjet_file):
+                    input_data = data_IO.read_data(self.input_file)
+                    graph_constructor.construct_graphs(self.config_file, self.output_dir, self.use_precomputed_graphs, \
+                                                       sub_or_part='subjet', input_data = input_data)
+                else:
+                    print(f'Subjet numpy graphs found: {graph_numpy_subjet_file}')
 
+            elif model in ['particle_gcn_pytorch', 'particle_gat_pytorch']:
+                # Check whether the graphs file has already been generated, and if not, generate it
+                for graph_structure in self.config[model]['graph_types']:
+                    graph_key = f'particle__{graph_structure}'
+                    graph_pyg_particle_file = os.path.join(self.output_dir, f"graphs_pyg_{graph_key}.pt")
+
+                    print('========================================================================')
+                    if self.regenerate_graphs or not os.path.exists(graph_pyg_particle_file):\
+                        graph_constructor.construct_graphs(self.config_file, self.output_dir, self.use_precomputed_graphs, \
+                                                           sub_or_part='particle', graph_structure = graph_structure)
+                    else:
+                        print(f'Particle pyg graphs found: {graph_pyg_particle_file}')
+
+            else: # for particle_net and transformer the graph structure is dynamically generated at each layer which dominates the training time.
+                continue
         # Perform ML analysis, and write results to file
         print()
         print('========================================================================')
@@ -116,9 +140,6 @@ if __name__ == '__main__':
     if not os.path.exists(args.config_file):
         print(f'Config file {args.config_file} does not exist! Exiting!')
         sys.exit(0)
-    if not os.path.exists(args.input_file):
-        print(f'Input file {args.input_file} does not exist! Exiting!')
-        sys.exit(0)
 
     # If output dir does not exist, create it
     if not os.path.exists(args.output_dir):
@@ -126,7 +147,7 @@ if __name__ == '__main__':
 
     start_time = time.time()
 
-    analysis = SteerAnalysis(input_file=args.input_file, 
+    analysis = SteerAnalysis(input_file= '' if not os.path.exists(args.input_file) else args.input_file,
                              config_file=args.config_file, 
                              output_dir=args.output_dir, 
                              regenerate_graphs=args.regenerate_graphs,

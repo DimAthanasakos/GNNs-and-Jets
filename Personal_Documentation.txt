@@ -1,12 +1,17 @@
 To Do list :
 
+
+    GNN:
+
+        -   For the particle GNNs currently only fully_connected graphs are constructed. The script for 3 different Laman Constructions is included in the 'graph_constructor' in the case of 
+            subjets. I also want to add one more Laman Constuction based partially on the nearest neighbor algorithm. This constuction is implemented in the ParticleNet_Laman.
+
     ParticleNet:
 
         -   ParticleNet only supports qvsg at particle level for now, which we load from the energy flow package. It's easy to extend to ZvsQCD in the future. 
         -   For the 7dim representation (Original ParticleNet feature space) I have not paid attention to the jet normalization procedure. We need to be careful, it might 
             significantly improve performance 
         -   I have only done tests on the ParticleNetLite. Might be useful to also run the full ParticleNet nn 
-        
 
     Transformer: 
 

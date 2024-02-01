@@ -24,7 +24,7 @@ import data_IO
 #---------------------------------------------------------------
 # Construct graphs from input_data and write them to file
 #---------------------------------------------------------------
-def construct_graphs(input_data, config_file, output_dir, use_precomputed_graphs=False):
+def construct_graphs(config_file, output_dir, use_precomputed_graphs=False, sub_or_part='particle', graph_structure='fully_connected', input_data = ''):
     '''
     Construct graphs:
       - Particle graphs are constructed from energyflow dataset
@@ -50,23 +50,29 @@ def construct_graphs(input_data, config_file, output_dir, use_precomputed_graphs
     '''
     #------------------------
     # Construct subjet graphs
-    print('------------------- Subjet graphs --------------------')
-    graph_structures = ['laman_naive', 'laman_1N', 'laman_1N2N']
+    if sub_or_part == 'subjet':
+        print('------------------- Subjet graphs --------------------')
+        graph_structures = ['laman_naive', 'laman_1N', 'laman_1N2N']
 
-    # Numpy format
-    _construct_subjet_graphs_numpy(input_data, graph_structures, config_file, output_dir, use_precomputed_graphs)
+        # Numpy format
+        _construct_subjet_graphs_numpy(input_data, graph_structures, config_file, output_dir, use_precomputed_graphs)
 
-    # PyG format
-    _construct_subjet_graphs_pyg(output_dir, graph_structures)
+        # PyG format
+        _construct_subjet_graphs_pyg(output_dir, graph_structures)
 
-    #------------------------
-    # Construct particle graphs
-    print()
-    print('------------------- Particle graphs --------------------')
-    graph_structures = ['fully_connected']
+    elif sub_or_part == 'particle':
+        #------------------------
+        # Construct particle graphs
+        # TODO: implement other connectivities
+        print()
+        print('------------------- Particle graphs --------------------')
 
-    # PyG format
-    _construct_particle_graphs_pyg(output_dir, graph_structures, N=500000)
+        # PyG format
+        _construct_particle_graphs_pyg(output_dir, graph_structure, N=500000)
+    
+    else: 
+        sys.exit(f'ERROR: Invalid choice for sub_or_part')
+
 
 #---------------------------------------------------------------
 # Construct graphs from input_data and write them to file
@@ -393,7 +399,7 @@ def _construct_subjet_graph_pyg(args):
 #---------------------------------------------------------------
 # Construct graphs from input_data and write them to file
 #---------------------------------------------------------------
-def _construct_particle_graphs_pyg(output_dir, graph_structures, N=500000):
+def _construct_particle_graphs_pyg(output_dir, graph_structure, N=500000):
     '''
     Construct a list of PyG graphs for the particle-based GNNs, loading from the energyflow dataset
 
@@ -405,6 +411,7 @@ def _construct_particle_graphs_pyg(output_dir, graph_structures, N=500000):
     print(f'Constructing PyG particle graphs from energyflow dataset...')
 
     # Load dataset; ignore pid information for now
+    # TODO: For each graph structure we load the dataset each time. We should do it once and then loop over the graph structures
     X, y = energyflow.qg_jets.load(N)
     X = X[:,:,:3]
     print(f'  (n_jets, n_particles, features): {X.shape}')
@@ -416,8 +423,7 @@ def _construct_particle_graphs_pyg(output_dir, graph_structures, N=500000):
         x[mask,1:3] -= yphi_avg
         x[mask,0] /= x[:,0].sum()
 
-    for graph_structure in graph_structures:
-        graph_key = f'particle__{graph_structure}'
+    graph_key = f'particle__{graph_structure}'
 
         # TODO: there seems to be some issue with multiprocessing and the PyG data structure
         #       that causes "too many files" error -- for now we just use a single for loop
@@ -427,15 +433,15 @@ def _construct_particle_graphs_pyg(output_dir, graph_structures, N=500000):
         #    args = [(x, y[i]) for i,x in enumerate(X)]
         #    graph_list = pool.map(self._init_particle_graph, args)
 
-        graph_list = []       
-        args = [(x, y[i]) for i, x in enumerate(X)] 
-        for arg in tqdm.tqdm(args, desc=f'  Constructing PyG graphs: {graph_key}', total=len(args)):
-            graph_list.append(_construct_particle_graph_pyg(arg))
+    graph_list = []       
+    args = [(x, y[i]) for i, x in enumerate(X)] 
+    for arg in tqdm.tqdm(args, desc=f'  Constructing PyG graphs: {graph_key}', total=len(args)):
+        graph_list.append(_construct_particle_graph_pyg(arg))
 
-        # Save to file using pytorch
-        graph_filename = os.path.join(output_dir, f"graphs_pyg_{graph_key}.pt")
-        torch.save(graph_list, graph_filename)
-        print(f'  Saved PyG graphs to {graph_filename}.')
+    # Save to file using pytorch
+    graph_filename = os.path.join(output_dir, f"graphs_pyg_{graph_key}.pt")
+    torch.save(graph_list, graph_filename)
+    print(f'  Saved PyG graphs to {graph_filename}.')
 
 #---------------------------------------------------------------
 def _construct_particle_graph_pyg(args):

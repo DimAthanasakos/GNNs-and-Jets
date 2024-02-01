@@ -15,6 +15,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sklearn
 from sklearn import metrics
+from sklearn.metrics import roc_auc_score
+
 
 import torch
 import torch_geometric
@@ -117,7 +119,7 @@ class GNN_PyTorch():
         n_output_classes = 2
         if self.model_info['model'] in ['particle_gcn_pytorch', 'subjet_gcn_pytorch']:
             return gcn_pytorch.GCN(self.n_input_features, hidden_dim, n_output_classes)
-        if self.model_info['model'] in ['particle_gat', 'subjet_gat']:
+        if self.model_info['model'] in ['particle_gat_pytorch', 'subjet_gat_pytorch']:
             n_heads = self.model_info['model_settings']['n_heads']
             edge_dimension = 1
             return gat_pytorch.GAT(self.n_input_features, hidden_dim, n_output_classes, n_heads, edge_dimension)
@@ -146,29 +148,17 @@ class GNN_PyTorch():
                 optimizer.step()                        # Update model parameters
                 optimizer.zero_grad()                   # Clear gradients.
 
-            train_acc = self._accuracy(self.train_loader)
-            test_acc = self._accuracy(self.test_loader)
-            print(f'Epoch: {epoch}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+            train_acc, train_auc, _ = self._accuracy(self.train_loader, self.model)
+            test_acc, test_auc, test_roc = self._accuracy(self.test_loader, self.model)
+            print(f'Epoch: {epoch}, Loss: {loss.item():.4f}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Test AUC: {test_auc:.4f}')
 
         # Save model
         torch.save(self.model.state_dict(), os.path.join(self.model_info['output_dir'], f"model_{self.model_info['model_key']}.pt"))
         print(f'--- runtime: {time.time() - start_time} seconds ---')
         print()
 
-        # Evaluate model on test set
-        pred_graphs_list = []
-        label_graphs_list = []
-        self.model.eval()
-        with torch.no_grad():
-            for batch in self.test_loader:
-                pred_graph = self._forward(batch.to(self.model_info['torch_device']))
-                pred_graphs_list.append(pred_graph.cpu().data.numpy())
-                label_graphs_list.append(batch.y.cpu().data.numpy())
-            pred_graphs = np.concatenate(pred_graphs_list, axis=0)
-            label_graphs = np.concatenate(label_graphs_list, axis=0)
-            auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
-            roc_curve = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
-            return auc, roc_curve
+
+        return test_auc, test_roc
 
     #---------------------------------------------------------------
     def _forward(self, batch):
@@ -185,12 +175,24 @@ class GNN_PyTorch():
         return out 
 
     #---------------------------------------------------------------
-    def _accuracy(self, loader):
+    def _accuracy(self, loader, model):
+        model.eval()  # Ensure the model is in evaluation mode
         correct = 0
+        preds_list = []
+        labels_list = []
+
         for batch in loader:
             batch = batch.to(self.model_info['torch_device'])
             out = self._forward(batch)
             pred = out.argmax(dim=1)
             correct += int((pred == batch.y).sum())
+
+            # Store predictions and labels for AUC calculation
+            preds_list.extend(out[:, 1].detach().cpu().numpy())  # Detach before converting to numpy
+            labels_list.extend(batch.y.cpu().numpy())
+
         accuracy = correct / len(loader.dataset)
-        return accuracy
+        auc = roc_auc_score(labels_list, preds_list)
+        roc_curve = metrics.roc_curve(labels_list, preds_list)
+
+        return accuracy, auc, roc_curve
