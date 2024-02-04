@@ -6,6 +6,9 @@ To Do list :
         -   For the particle GNNs currently only fully_connected graphs are constructed. The script for 3 different Laman Constructions is included in the 'graph_constructor' in the case of 
             subjets. I also want to add one more Laman Constuction based partially on the nearest neighbor algorithm. This constuction is implemented in the ParticleNet_Laman.
 
+        -   Both GCN and GAT saturate their performance (as measured by the AUC) at ~0.86 and ~100k jets. Already for the GCN this is somewhat low, because it has the same expressivity 
+            as the Deep Sets' PFN which scores a ~0.88-0.89 at a similar dataset. Matching the GCN performance to PFN could be an insructive step.
+            
     ParticleNet:
 
         -   ParticleNet only supports qvsg at particle level for now, which we load from the energy flow package. It's easy to extend to ZvsQCD in the future. 
