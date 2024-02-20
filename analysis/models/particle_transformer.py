@@ -14,7 +14,6 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn
-from sklearn import metrics
 
 import torch
 import networkx
@@ -77,17 +76,19 @@ class ParT():
             x_ParT[mask,0] /= x_ParT[:,0].sum()
 
         # TODO:
-        # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features instead of (px, py, pz, E) in order to save compute time
-        
+        # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
+        # The input terms for each particle are left as given in the ParticleTransformer architecture.
+            
         # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
         self.X_ParT = energyflow.p4s_from_ptyphipids(self.X_ParT, error_on_unknown = True)
         # (E, px, py, pz) -> (px, py, pz, E)
         self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
         
         # Transpose the data to match the ParticleNet architecture convention which is (batch_size, n_features, n_particles) 
-        # instead of the current (batch_size, n_particles, n_features)
+        # instead of the current shape (batch_size, n_particles, n_features)
         self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
-
+        
+        
         # Split data into train, val and test sets
         (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(self.X_ParT, self.Y_ParT,
                                                                                                                val=self.n_val, test=self.n_test)
@@ -114,10 +115,15 @@ class ParT():
         '''
 
         # Define the model 
-        model = ParticleTransformer.ParticleTransformer(input_dim = 4, num_classes = 2) # 4 features: (px, py, pz, E)
+        model = ParticleTransformer.ParticleTransformer(input_dim = 1, num_classes = 2, pair_input_dim = 3, num_heads = 8) # 4 features: (px, py, pz, E)
 
         model = model.to(self.torch_device)
         
+        # Print the model architecture
+        print()
+        print(model)
+        print(f'Total number of parameters: {sum(p.numel() for p in model.parameters())}')
+        print()
         return model 
 
 
@@ -136,16 +142,16 @@ class ParT():
 
         for epoch in range(1, epochs+1):
             print("--------------------------------")
-            self._train_part(self.train_loader, self.model, optimizer, criterion)
+            loss = self._train_part(self.train_loader, self.model, optimizer, criterion)
 
             auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model)
             auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model)
                 
             if (epoch)%5 == 0:
                 auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model)
-                print(f'Epoch: {epoch:02d}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
             else:
-                print(f'Epoch: {epoch:02d}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
 
         time_end = time.time()
         print("--------------------------------")
@@ -158,7 +164,7 @@ class ParT():
 
         
     #---------------------------------------------------------------
-    def _train_part(self, train_loader, model, optimizer, criterion):
+    def _train_part(self, train_loader, model, optimizer, criterion, laman = False):
 
         model.train() # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
                                   # that behave differently in training mode vs eval mode (which is the default)
@@ -170,15 +176,22 @@ class ParT():
             inputs, labels = data
             inputs = inputs.to(self.torch_device)
             labels = labels.to(self.torch_device) 
-            
-            # we need to turn labels to one-hot encoding depending on the application (?)
-            #labels_onehot = torch.nn.functional.one_hot(labels, num_classes=2).to(self.torch_device)
-            
+                        
             # zero the parameter gradients
             optimizer.zero_grad()
 
+            # create pt of each particle instead of (px, py, pz, E) for the input 
+            pt = torch.sqrt(inputs[:, 0, :]**2 + inputs[:, 1, :]**2)
+            pt = pt.unsqueeze(1).clamp(min=10**-8)
+
+            if laman: # sort the particles by pt. Required for Laman Graphs which are constructed in the architecture.ParticleTransformer script
+                pt, indices = torch.sort(pt, dim = 2, descending = True)
+                # Gather inputs according to the sorted indices along the particles dimension
+                inputs = torch.gather(inputs, dim=2, index=indices.expand_as(inputs))
+                
             # forward + backward + optimize
-            outputs = model(x = inputs, v = inputs)
+            outputs = model(x = pt, v = inputs, laman = laman)
+
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -192,11 +205,8 @@ class ParT():
 
     #---------------------------------------------------------------
     @torch.no_grad()
-    def _test_part(self, test_loader, model):
+    def _test_part(self, test_loader, model, laman = False):
         model.eval()
-
-        correct = 0
-        tot_datapoints = 0
 
         all_labels = []
         all_output_softmax = []
@@ -205,23 +215,30 @@ class ParT():
             inputs, labels = data
             inputs = inputs.to(self.torch_device)
             labels = labels.to(self.torch_device)
-            tot_datapoints += len(labels)
 
-            outputs = model(x = inputs, v = inputs)
+
+            # create pt of each particle instead of (px, py, pz, E) for the input 
+            pt = torch.sqrt(inputs[:, 0, :]**2 + inputs[:, 1, :]**2)
+            pt = pt.unsqueeze(1).clamp(min=10**-8)
+
+            if laman: # sort the particles by pt. Required for Laman Graphs which are constructed in the architecture.ParticleTransformer script
+                pt, indices = torch.sort(pt, dim = 2, descending = True)
+                # Gather inputs according to the sorted indices along the particles dimension
+                inputs = torch.gather(inputs, dim=2, index=indices.expand_as(inputs))
+
+            outputs = model(x = pt, v = inputs, laman = laman)
 
             output_softmax = torch.nn.functional.softmax(outputs, dim=1) # Keep on GPU
             all_output_softmax.append(output_softmax[:, 1].detach().cpu().numpy())
             all_labels.append(labels.detach().cpu().numpy())
 
-            pred = outputs.argmax(dim=1)  # No need for keepdim=True
-            correct += pred.eq(labels).sum().item()
 
-        # Calculate ROC, AUC outside the loop
+        # Calculate ROC, AUC outside the loop. Make lists of arrays into arrays
         all_labels = np.concatenate(all_labels)
         all_output_softmax = np.concatenate(all_output_softmax)
-
+        
+        accuracy = sklearn.metrics.accuracy_score(all_labels, all_output_softmax > 0.5)
         auc = sklearn.metrics.roc_auc_score(all_labels, all_output_softmax)
         roc = sklearn.metrics.roc_curve(all_labels, all_output_softmax)
-
-        return (auc, correct / tot_datapoints, roc)
-
+        
+        return (auc, accuracy, roc)

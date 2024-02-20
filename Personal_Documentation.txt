@@ -21,3 +21,5 @@ To Do list :
         -   Pass (pt, eta, phi) to the Transformer instead of doing (pt, eta, phi) -> (px, py, pz, e) in the models script and then reversing it in the architecture script 
             This is relevant for the pairwise interaction features function. The input features of each individual particle accepts all forms.
 
+        -   For 1d input: Test with ~500k jets whether LayerNorm is useful for the embedding layer (after the first layer, otherwise: random classifier)
+            With 50k no LayerNorm is slightly better. 

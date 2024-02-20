@@ -15,8 +15,78 @@ import copy
 import torch
 import torch.nn as nn
 from functools import partial
+import numpy as np
+import time
 
 import warnings
+
+def laman_graph(x): 
+    batch_size, _, seq_len = x.size() 
+    indices = np.zeros((batch_size, seq_len, seq_len))
+    for i in range(seq_len-2):
+        indices[:, i, i+1] = 1
+        indices[:, i, i+2] = 1
+    indices[seq_len-2, seq_len-1] = 1 
+    
+    return indices
+
+
+# Create a Laman Graph using a mod of the k nearest neighbors algorithm.
+def knn(x):                                                                            # x: (batch_size, (η, φ), num_points)
+
+    batch_size, _, num_particles = x.size()
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+    
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
+
+    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
+    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
+
+    # Connect the 3 hardest particles in the jet in a triangle 
+    idx_3 = pairwise_distance[:, :3, :3].topk(k=3, dim=-1) # (batch_size, 3, 2)
+    idx_3 = [idx_3[0][:,:,1:], idx_3[1][:,:,1:]] # (batch_size, 3, 1)
+    
+    # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
+    pairwise_distance = pairwise_distance[:, 3:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
+    
+    # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
+    pairwise_distance = torch.tril(pairwise_distance, diagonal=2) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=3)  # -inf because topk indices return the biggest values -> we've made all distances negative 
+
+    # Find the indices of the 2 nearest neighbors for each particle
+        
+    idx = pairwise_distance.topk(k=2, dim=-1) # (batch_size, num_points, 2)
+    
+    idx = idx[1] # (batch_size, num_points, 2)
+        
+    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
+    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
+
+    # Make this into a boolean tensor to use for masking later: 
+    # Initialize a boolean mask with False, assuming no connections
+    idx_mask = torch.zeros(batch_size, num_particles, num_particles,  dtype=torch.bool, device = idx.device)
+
+    # Assuming laman_indices contains valid indices within [0, num_particles)
+    # Update bool_mask to True for connections indicated in laman_indices
+
+    if False:
+        time_st = time.time()
+        for b in range(batch_size):
+            for p in range(num_particles):
+                # Get indices for connections of particle p in batch b
+                connections = idx[b, p]
+                # Ensure connections are within bounds
+                connections = connections[connections < num_particles]
+                # Mark these connections as True
+                idx_mask[b, p, connections] = True
+        print(f"Time to create the mask = {time.time() - time_st}")
+
+        return idx_mask
+    else:
+        return idx
 
 
 
@@ -251,9 +321,9 @@ class Embed(nn.Module):
 
         self.input_bn = nn.BatchNorm1d(input_dim) if normalize_input else None
         module_list = []
-        for dim in dims:
+        for index, dim in enumerate(dims):
             module_list.extend([
-                nn.LayerNorm(input_dim),
+                #nn.LayerNorm(input_dim) if input_dim > 1  else nn.Identity(), # LayerNorm averages across the feature space for the same particle. For 1d input space this leads to a random classifier.
                 nn.Linear(input_dim, dim),
                 nn.GELU() if activation == 'gelu' else nn.ReLU(),
             ])
@@ -261,11 +331,13 @@ class Embed(nn.Module):
         self.embed = nn.Sequential(*module_list)
 
     def forward(self, x):
+
         if self.input_bn is not None:
             # x: (batch, embed_dim, seq_len)
             x = self.input_bn(x)
             x = x.permute(2, 0, 1).contiguous()
         # x: (seq_len, batch, embed_dim)
+
         return self.embed(x)
 
 
@@ -277,14 +349,15 @@ class PairEmbed(nn.Module):
             for_onnx=False):
         super().__init__()
 
-        self.pairwise_lv_dim = pairwise_lv_dim
+        self.pairwise_lv_dim = pairwise_lv_dim # the number of features for the pairwise interaction terms. The default is 4 for [lnΔ, lnk_t, lnz, lnm^2]
         self.pairwise_input_dim = pairwise_input_dim
         self.is_symmetric = (pairwise_lv_dim <= 5) and (pairwise_input_dim == 0)
         self.remove_self_pair = remove_self_pair
         self.mode = mode
         self.for_onnx = for_onnx
-        self.pairwise_lv_fts = partial(pairwise_lv_fts, num_outputs=pairwise_lv_dim, eps=eps, for_onnx=for_onnx)
-        self.out_dim = dims[-1]
+        self.pairwise_lv_fts = partial(pairwise_lv_fts, num_outputs=pairwise_lv_dim, eps=eps, for_onnx=for_onnx) # partial: freezes the arguments of the function pairwise_lv_fts 
+                                                                                                                 # to num_outputs=pairwise_lv_dim, eps=eps, for_onnx=for_onnx
+        self.out_dim = dims[-1] 
 
         if self.mode == 'concat':
             input_dim = pairwise_lv_dim + pairwise_input_dim
@@ -329,6 +402,7 @@ class PairEmbed(nn.Module):
                 self.fts_embed = nn.Sequential(*module_list)
         else:
             raise RuntimeError('`mode` can only be `sum` or `concat`')
+
 
     def forward(self, x, uu=None):
         # x: (batch, v_dim, seq_len) with v_dim = num_features for the input to the interaction terms. The default is 4 for [px, py, pz, E]
@@ -447,11 +521,17 @@ class Block(nn.Module):
         else:
             residual = x
             x = self.pre_attn_norm(x)
-            x = self.attn(x, x, x, key_padding_mask=padding_mask,
-                          attn_mask=attn_mask)[0]  # (seq_len, batch, embed_dim)
+            x, weights = self.attn(x, x, x, key_padding_mask=padding_mask,
+                          attn_mask=attn_mask)  # (seq_len, batch, embed_dim). By default it returnes the attention weights as well 
+            
+            #print(f"residual.shape = {residual.shape}")
+            #print(f"x.shape = {x.shape}")
+            #print(f"x[0, :6, :6] = {x[0, :6, :6]}")
+            #print(f"weights.shape = {weights.shape}")
+            #print(f"weights[0, :6, :6] = {weights[0, :6, :6]}")
             # Pytorch throws a warning here which I suspect is relevant to: https://github.com/pytorch/pytorch/issues/95702 
             # It looks like a bug of pytorch 2.x 
-            # TODO: Address this or hope that it resolved in the next version of pytorch
+            # TODO: Address this or hope that it's resolved in the next version of pytorch
             warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask and attn_mask is deprecated.*")
 
         if self.c_attn is not None:
@@ -464,6 +544,8 @@ class Block(nn.Module):
         x = self.dropout(x)
         x += residual
 
+        #print(f"x.shape = {x.shape}")
+
         residual = x
         x = self.pre_fc_norm(x)
         x = self.act(self.fc1(x))
@@ -475,6 +557,10 @@ class Block(nn.Module):
         if self.w_resid is not None:
             residual = torch.mul(self.w_resid, residual)
         x += residual
+
+        #print(f"x.shape = {x.shape}")
+        #print()
+        #time.sleep(4)
 
         return x
 
@@ -489,8 +575,8 @@ class ParticleTransformer(nn.Module):
                  pair_extra_dim=0, # ?
                  remove_self_pair=False,
                  use_pre_activation_pair=True,
-                 embed_dims=[128, 512, 128], # the MLP for transforming the particle features input 
-                 pair_embed_dims=[64, 64, 64], # the MPL for transforming the pairwise features input, i.e. interactions. Note that later add
+                 embed_dims=[128, 512, 128],   # the MLP for transforming the particle features input 
+                 pair_embed_dims=[64, 64, 64], # the MPL for transforming the pairwise features input, i.e. interactions. Note that later we add
                                                # one more layers to this to match the number of heads in the attention layer.
                  num_heads=8,  # how many attention heads in each particle attention block
                  num_layers=8, # how many particle attention blocks
@@ -509,6 +595,7 @@ class ParticleTransformer(nn.Module):
         self.trimmer = SequenceTrimmer(enabled=trim and not for_inference)
         self.for_inference = for_inference
         self.use_amp = use_amp
+        self.num_heads = num_heads
 
         embed_dim = embed_dims[-1] if len(embed_dims) > 0 else input_dim
         default_cfg = dict(embed_dim=embed_dim, num_heads=num_heads, ffn_ratio=4,
@@ -533,7 +620,9 @@ class ParticleTransformer(nn.Module):
         
         # self.pair_embed is only used if we want "interaction terms" between pairs of particles. These act as bias in the attention layer.
         # It is the MLP that transforms the interactions before passing it to the attention layers 
-        self.pair_embed = PairEmbed(
+        # The final embedding dim for the pair_embed is the same as the number of heads in the attention layer. 
+        # Each head has only one bias feature for all pairs of particles.
+        self.pair_embed = PairEmbed( 
             pair_input_dim, pair_extra_dim, pair_embed_dims + [cfg_block['num_heads']],
             remove_self_pair=remove_self_pair, use_pre_activation_pair=use_pre_activation_pair,
             for_onnx=for_inference) if pair_embed_dims is not None and pair_input_dim + pair_extra_dim > 0 else None
@@ -560,9 +649,9 @@ class ParticleTransformer(nn.Module):
     def no_weight_decay(self):
         return {'cls_token', }
 
-    def forward(self, x, v=None, mask=None, uu=None, uu_idx=None):
+    def forward(self, x, v=None, mask=None, uu=None, uu_idx=None, laman = False):
         # x: (N, C, P)
-        # v: (N, 4, P) [px,py,pz,energy]
+        # v: (N, 4, P) [px,py,pz,energy] from which we construct the interaction terms between pairs of particles
         # mask: (N, 1, P) -- real particle = 1, padded = 0
         # for pytorch: uu (N, C', num_pairs), uu_idx (N, 2, num_pairs): Sparce format for indexing the pairs  
         # for onnx: uu (N, C', P, P), uu_idx=None
@@ -571,21 +660,70 @@ class ParticleTransformer(nn.Module):
             if not self.for_inference: # if training 
                 if uu_idx is not None:
                     uu = build_sparse_tensor(uu, uu_idx, x.size(-1)) # returns: (N, C', P, P)
-            x, v, mask, uu = self.trimmer(x, v, mask, uu) 
-            padding_mask = ~mask.squeeze(1)  # (N, P) and padded = 1, real particle = 0 now due to ~ (bitwise not)
+            x, v, mask, uu = self.trimmer(x, v, mask, uu)            # the default is trim = False so this does nothing  
+            padding_mask = ~mask.squeeze(1)                          # (N, P) and padded = 1, real particle = 0 now due to ~ (bitwise not)
 
         with torch.cuda.amp.autocast(enabled=self.use_amp): # if true it lowers the precision of some computations to half precision for faster computation
                                                             # The default for self.use_amp = False
-            # input embedding
+
+            # input embedding 
             x = self.embed(x).masked_fill(~mask.permute(2, 0, 1), 0)  # (P, N, C)  # masked_fill: fill the elements of x with 0 where mask is False
                                                                       # mask.permute(2, 0, 1) -> (P, N, 1)
+          
+            # pair embedding to get the interaction terms between pairs of particles -> Acts as the bias in the attention layer of the particle attn block.
+
             attn_mask = None
             if (v is not None or uu is not None) and self.pair_embed is not None:
                 attn_mask = self.pair_embed(v, uu).view(-1, v.size(-1), v.size(-1))  # (N*num_heads, P, P)
 
+            if laman: # filter the attn_mask with the laman_indices
+                # Masking operation based on the Laman Graph.
+                print('laman')
+                laman_indices = knn(v) # pass (px, py, pz, E) to knn so that it can then construct the Laman Graph based on the mod. of the knn algo. 
+
+                batch_size, num_particles, _ = laman_indices.shape
+                # Initialize a boolean mask with False (indicating no connection) for all pairs
+                bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
+
+                # Efficiently populate the boolean mask based on laman_indices
+                for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
+                    # Extract the current set of indices indicating connections
+                    current_indices = laman_indices[:, :, i]
+
+                    # Generate a batch and source particle indices to accompany current_indices for scatter_
+                    batch_indices = torch.arange(batch_size, device=attn_mask.device).view(-1, 1).expand(-1, num_particles)
+                    src_particle_indices = torch.arange(num_particles, device=attn_mask.device).expand(batch_size, -1)
+
+                    # Use scatter_ to update the bool_mask; setting the connection locations to True
+                    bool_mask[batch_indices, src_particle_indices, current_indices] = True
+
+                #print()
+                #print(f'laman_indices.shape: {laman_indices.shape}')
+                #print(f"laman_indices[0, :7, :]: {laman_indices[0, :7, :]}")
+
+                #print(f'bool_mask.shape: {bool_mask.shape}')
+                #print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
+                # Make the Laman Edges bidirectional 
+                #bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+                bool_mask =  bool_mask.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, num_particles, num_particles).to(attn_mask.device)
+
+                attn_mask_laman = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
+
+#                print(f'attn_mask.shape: {attn_mask.shape}')
+
+ #               print(f'bool_mask.shape: {bool_mask.shape}')
+
+  #              print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
+     #           print()
+   #             print(f"attn_mask[0, :7, :7]: {attn_mask[0, :7, :7]}")
+    #            print()
+      #          print(f"attn_mask_laman[0, :7, :7]: {attn_mask_laman[0, :7, :7]}")
+       #         time.sleep(10)
+
             # transform
             for block in self.blocks:
-                x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask=attn_mask)
+                x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask = attn_mask)
 
             # extract class token
             cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
@@ -602,4 +740,3 @@ class ParticleTransformer(nn.Module):
                 output = torch.softmax(output, dim=1)
             # print('output:\n', output)
             return output
-

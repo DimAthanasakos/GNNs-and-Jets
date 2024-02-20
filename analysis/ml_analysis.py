@@ -65,7 +65,7 @@ class MLAnalysis(common_base.CommonBase):
         self.n_test = config['n_test']
         self.n_total = self.n_train + self.n_val + self.n_test
         self.test_frac = 1. * self.n_test / self.n_total
-        self.val_frac = 1. * self.n_val / (self.n_train + self.n_val)
+        self.val_frac  = 1. * self.n_val /  self.n_total
 
         self.label_0 = config['label_0']
         self.label_1 = config['label_1']
@@ -153,8 +153,6 @@ class MLAnalysis(common_base.CommonBase):
             # TODO: PFN (tensorflow)
 
             # TODO: PFN (pytorch)
-
-            # TODO: ParticleNetLite
 
             # ---------- Write ROC curve dict to file ----------
             output_filename = os.path.join(self.output_dir, f'ROC.pkl')
