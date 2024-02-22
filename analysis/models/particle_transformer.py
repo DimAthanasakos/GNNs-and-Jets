@@ -49,10 +49,29 @@ class ParT():
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
         self.n_test = model_info['n_test']
-        self.n_val = model_info['n_val']
+        self.n_val = model_info['n_val'] 
         
+        self.load_model = model_info['model_settings']['load_model'] # Load a pre-trained model or not
+        self.save_model = model_info['model_settings']['save_model'] # Save the model or not
 
+        self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
+        if self.input_dim not in [1, 4]:
+            raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 or 4') 
+        
+        self.pair_input_dim = model_info['model_settings']['pair_input_dim']  # how many interaction terms for pair of particles. 
+                                                                              # If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ),
+                                                                              # if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
+
+        if model_info['model_key'].endswith('laman'):
+            self.laman = True
+        else: 
+            self.laman = False
+
+        #if self.laman and self.input_dim == 4: 
+        #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
+            
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
+
         self.model = self.init_model()
 
     #---------------------------------------------------------------
@@ -75,12 +94,15 @@ class ParT():
             x_ParT[mask,1:3] -= yphi_avg
             x_ParT[mask,0] /= x_ParT[:,0].sum()
 
+        
+
         # TODO:
         # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
         # The input terms for each particle are left as given in the ParticleTransformer architecture.
             
         # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
         self.X_ParT = energyflow.p4s_from_ptyphipids(self.X_ParT, error_on_unknown = True)
+
         # (E, px, py, pz) -> (px, py, pz, E)
         self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
         
@@ -115,7 +137,7 @@ class ParT():
         '''
 
         # Define the model 
-        model = ParticleTransformer.ParticleTransformer(input_dim = 1, num_classes = 2, pair_input_dim = 3, num_heads = 8) # 4 features: (px, py, pz, E)
+        model = ParticleTransformer.ParticleTransformer(input_dim = self.input_dim, num_classes = 2, pair_input_dim = self.pair_input_dim) # 4 features: (px, py, pz, E)
 
         model = model.to(self.torch_device)
         
@@ -124,6 +146,12 @@ class ParT():
         print(model)
         print(f'Total number of parameters: {sum(p.numel() for p in model.parameters())}')
         print()
+
+        if self.load_model:
+            print(f"Loading pre-trained model")
+            self.path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+            model.load_state_dict(torch.load(self.path))
+    
         return model 
 
 
@@ -142,13 +170,13 @@ class ParT():
 
         for epoch in range(1, epochs+1):
             print("--------------------------------")
-            loss = self._train_part(self.train_loader, self.model, optimizer, criterion)
+            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, laman = self.laman)
 
-            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model)
-            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model)
+            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, laman = self.laman)
+            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, laman = self.laman)
                 
             if (epoch)%5 == 0:
-                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model)
+                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, laman = self.laman)
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
             else:
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
@@ -159,6 +187,11 @@ class ParT():
         print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs} seconds")
         print()
         print()
+        
+        if self.save_model:
+            print(f"Saving model")
+            path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+            torch.save(self.model.state_dict(), path) 
         
         return auc_test, roc_test
 
@@ -190,7 +223,7 @@ class ParT():
                 inputs = torch.gather(inputs, dim=2, index=indices.expand_as(inputs))
                 
             # forward + backward + optimize
-            outputs = model(x = pt, v = inputs, laman = laman)
+            outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, laman = laman)
 
             loss = criterion(outputs, labels)
             loss.backward()
@@ -226,7 +259,7 @@ class ParT():
                 # Gather inputs according to the sorted indices along the particles dimension
                 inputs = torch.gather(inputs, dim=2, index=indices.expand_as(inputs))
 
-            outputs = model(x = pt, v = inputs, laman = laman)
+            outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, laman = laman)
 
             output_softmax = torch.nn.functional.softmax(outputs, dim=1) # Keep on GPU
             all_output_softmax.append(output_softmax[:, 1].detach().cpu().numpy())

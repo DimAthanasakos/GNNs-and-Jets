@@ -65,28 +65,7 @@ def knn(x):                                                                     
     # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
     idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
 
-    # Make this into a boolean tensor to use for masking later: 
-    # Initialize a boolean mask with False, assuming no connections
-    idx_mask = torch.zeros(batch_size, num_particles, num_particles,  dtype=torch.bool, device = idx.device)
-
-    # Assuming laman_indices contains valid indices within [0, num_particles)
-    # Update bool_mask to True for connections indicated in laman_indices
-
-    if False:
-        time_st = time.time()
-        for b in range(batch_size):
-            for p in range(num_particles):
-                # Get indices for connections of particle p in batch b
-                connections = idx[b, p]
-                # Ensure connections are within bounds
-                connections = connections[connections < num_particles]
-                # Mark these connections as True
-                idx_mask[b, p, connections] = True
-        print(f"Time to create the mask = {time.time() - time_st}")
-
-        return idx_mask
-    else:
-        return idx
+    return idx
 
 
 
@@ -321,9 +300,11 @@ class Embed(nn.Module):
 
         self.input_bn = nn.BatchNorm1d(input_dim) if normalize_input else None
         module_list = []
+        starting_dim = input_dim
         for index, dim in enumerate(dims):
             module_list.extend([
-                #nn.LayerNorm(input_dim) if input_dim > 1  else nn.Identity(), # LayerNorm averages across the feature space for the same particle. For 1d input space this leads to a random classifier.
+                nn.LayerNorm(input_dim) if starting_dim > 1  else nn.Identity(), # LayerNorm averages across the feature space for the same particle. For 1d input space this leads to a random classifier.
+                                                                                 # Surprisingly, for 1d input space, although we can use LayerNorm for later layers, this decreases the performance. 
                 nn.Linear(input_dim, dim),
                 nn.GELU() if activation == 'gelu' else nn.ReLU(),
             ])
@@ -678,7 +659,6 @@ class ParticleTransformer(nn.Module):
 
             if laman: # filter the attn_mask with the laman_indices
                 # Masking operation based on the Laman Graph.
-                print('laman')
                 laman_indices = knn(v) # pass (px, py, pz, E) to knn so that it can then construct the Laman Graph based on the mod. of the knn algo. 
 
                 batch_size, num_particles, _ = laman_indices.shape
@@ -704,22 +684,22 @@ class ParticleTransformer(nn.Module):
                 #print(f'bool_mask.shape: {bool_mask.shape}')
                 #print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
                 # Make the Laman Edges bidirectional 
-                #bool_mask = bool_mask | bool_mask.transpose(1, 2)
+                bool_mask = bool_mask | bool_mask.transpose(1, 2)
 
                 bool_mask =  bool_mask.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, num_particles, num_particles).to(attn_mask.device)
 
-                attn_mask_laman = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
+                attn_mask= torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
 
-#                print(f'attn_mask.shape: {attn_mask.shape}')
+                #print(f'attn_mask.shape: {attn_mask.shape}')
 
- #               print(f'bool_mask.shape: {bool_mask.shape}')
+                #print(f'bool_mask.shape: {bool_mask.shape}')
 
-  #              print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
-     #           print()
-   #             print(f"attn_mask[0, :7, :7]: {attn_mask[0, :7, :7]}")
-    #            print()
-      #          print(f"attn_mask_laman[0, :7, :7]: {attn_mask_laman[0, :7, :7]}")
-       #         time.sleep(10)
+                #print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
+                #print()
+                #print(f"attn_mask[0, :7, :7]: {attn_mask[0, :7, :7]}")
+                #print()
+                #print(f"attn_mask_laman[0, :7, :7]: {attn_mask_laman[0, :7, :7]}")
+                #time.sleep(10)
 
             # transform
             for block in self.blocks:

@@ -125,7 +125,7 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 self.AUC[model_key], self.roc_curve_dict[model_key] = particle_net.ParticleNet(model_info_temp).train()
 
-            if model in ['particle_transformer']:
+            if model in ['particle_transformer', 'particle_transformer_laman']:
                 model_key = f'{model}'
                 print(f'model_key: {model_key}')
                 model_info_temp = model_info.copy()
