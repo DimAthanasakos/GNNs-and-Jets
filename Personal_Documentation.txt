@@ -23,3 +23,6 @@ To Do list :
 
         -   For 1d input: Test with ~500k jets whether LayerNorm is useful for the embedding layer (after the first layer, otherwise: random classifier)
             With 50k no LayerNorm is slightly better. 
+
+        -   Laman with random removal of angles: When we remove angles we need to ensure we still have a connected graph. Currently we hard code that for each jet 
+            remove_angles <= n_particles^jet. 

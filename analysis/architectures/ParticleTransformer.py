@@ -17,56 +17,9 @@ import torch.nn as nn
 from functools import partial
 import numpy as np
 import time
+import random 
 
 import warnings
-
-def laman_graph(x): 
-    batch_size, _, seq_len = x.size() 
-    indices = np.zeros((batch_size, seq_len, seq_len))
-    for i in range(seq_len-2):
-        indices[:, i, i+1] = 1
-        indices[:, i, i+2] = 1
-    indices[seq_len-2, seq_len-1] = 1 
-    
-    return indices
-
-
-# Create a Laman Graph using a mod of the k nearest neighbors algorithm.
-def knn(x):                                                                            # x: (batch_size, (η, φ), num_points)
-
-    batch_size, _, num_particles = x.size()
-    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
-    
-    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
-    phi = torch.atan2(py, px)
-    
-    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
-
-    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
-    xx = torch.sum(x ** 2, dim=1, keepdim=True)
-    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
-
-    # Connect the 3 hardest particles in the jet in a triangle 
-    idx_3 = pairwise_distance[:, :3, :3].topk(k=3, dim=-1) # (batch_size, 3, 2)
-    idx_3 = [idx_3[0][:,:,1:], idx_3[1][:,:,1:]] # (batch_size, 3, 1)
-    
-    # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
-    pairwise_distance = pairwise_distance[:, 3:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
-    
-    # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
-    pairwise_distance = torch.tril(pairwise_distance, diagonal=2) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=3)  # -inf because topk indices return the biggest values -> we've made all distances negative 
-
-    # Find the indices of the 2 nearest neighbors for each particle
-        
-    idx = pairwise_distance.topk(k=2, dim=-1) # (batch_size, num_points, 2)
-    
-    idx = idx[1] # (batch_size, num_points, 2)
-        
-    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
-    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
-
-    return idx
-
 
 
 @torch.jit.script
@@ -254,7 +207,7 @@ class SequenceTrimmer(nn.Module):
         self.target = target
         self._counter = 0
 
-    def forward(self, x, v=None, mask=None, uu=None):
+    def forward(self, x, v=None, mask=None, uu=None, graph=None):
         # x: (N, C, P)
         # v: (N, 4, P) [px,py,pz,energy]
         # mask: (N, 1, P) -- real particle = 1, padded = 0
@@ -264,22 +217,36 @@ class SequenceTrimmer(nn.Module):
         mask = mask.bool()
 
         if self.enabled:
+            if self._counter == 0: 
+                print()
+                print(f"Trimmer enabled")
+                print()
+
             if self._counter < 5:
                 self._counter += 1
             else:
-                if self.training:
-                    q = min(1, random.uniform(*self.target))
-                    maxlen = torch.quantile(mask.type_as(x).sum(dim=-1), q).long()
+                if self.training: # An attribute of the nn.Module class. It is set to True when the model is in training mode, i.e. model.train() is called.
+                    #print()
+                    q = min(1, random.uniform(*self.target)) 
+                    #print(f"q = {q}")
+                    maxlen = torch.quantile(mask.type_as(x).sum(dim=-1), q).long() # maxlen is always 139 since we dont provide a mask
+                    #print(f"maxlen = {maxlen}")
                     rand = torch.rand_like(mask.type_as(x))
                     rand.masked_fill_(~mask, -1)
-                    perm = rand.argsort(dim=-1, descending=True)  # (N, 1, P)
+                    #print(f"rand.shape = {rand.shape}")
+                    #print(f"rand = {rand}")
+                    perm = rand.argsort(dim=-1, descending=True)  # (N, 1, P). This returns the indices that would sort the rand tensor 
                     mask = torch.gather(mask, -1, perm)
-                    x = torch.gather(x, -1, perm.expand_as(x))
+                    #print(f"x[0] = {x[0]}")
+                    x = torch.gather(x, -1, perm.expand_as(x))    # Permutes the elements of the tensor x according to the indices in perm.
                     if v is not None:
                         v = torch.gather(v, -1, perm.expand_as(v))
                     if uu is not None:
                         uu = torch.gather(uu, -2, perm.unsqueeze(-1).expand_as(uu))
                         uu = torch.gather(uu, -1, perm.unsqueeze(-2).expand_as(uu))
+                    if graph is not None: 
+                        graph = torch.gather(graph, -1, perm.expand_as(graph))
+                        graph = torch.gather(graph, -2, perm.expand_as(graph))
                 else:
                     maxlen = mask.sum(dim=-1).max()
                 maxlen = max(maxlen, 1)
@@ -290,8 +257,11 @@ class SequenceTrimmer(nn.Module):
                         v = v[:, :, :maxlen]
                     if uu is not None:
                         uu = uu[:, :, :maxlen, :maxlen]
+                    if graph is not None:
+                        graph = graph[:, :, :maxlen, :maxlen]
+                
 
-        return x, v, mask, uu
+        return x, v, mask, uu, graph
 
 
 class Embed(nn.Module):
@@ -505,11 +475,6 @@ class Block(nn.Module):
             x, weights = self.attn(x, x, x, key_padding_mask=padding_mask,
                           attn_mask=attn_mask)  # (seq_len, batch, embed_dim). By default it returnes the attention weights as well 
             
-            #print(f"residual.shape = {residual.shape}")
-            #print(f"x.shape = {x.shape}")
-            #print(f"x[0, :6, :6] = {x[0, :6, :6]}")
-            #print(f"weights.shape = {weights.shape}")
-            #print(f"weights[0, :6, :6] = {weights[0, :6, :6]}")
             # Pytorch throws a warning here which I suspect is relevant to: https://github.com/pytorch/pytorch/issues/95702 
             # It looks like a bug of pytorch 2.x 
             # TODO: Address this or hope that it's resolved in the next version of pytorch
@@ -525,8 +490,6 @@ class Block(nn.Module):
         x = self.dropout(x)
         x += residual
 
-        #print(f"x.shape = {x.shape}")
-
         residual = x
         x = self.pre_fc_norm(x)
         x = self.act(self.fc1(x))
@@ -538,10 +501,6 @@ class Block(nn.Module):
         if self.w_resid is not None:
             residual = torch.mul(self.w_resid, residual)
         x += residual
-
-        #print(f"x.shape = {x.shape}")
-        #print()
-        #time.sleep(4)
 
         return x
 
@@ -567,13 +526,14 @@ class ParticleTransformer(nn.Module):
                  fc_params=[],   # check this in relation to the cls token 
                  activation='gelu',
                  # misc
-                 trim=True,
+                 trim=False,  
                  for_inference=False,
                  use_amp=False,
                  **kwargs) -> None:
         super().__init__(**kwargs)
 
-        self.trimmer = SequenceTrimmer(enabled=trim and not for_inference)
+        self.trimmer = SequenceTrimmer(enabled=trim and not for_inference) # Since we do not provide a mask, what this does is to permute the input (x, v, graph)
+                                                                           # which in principle leads to better generalization.
         self.for_inference = for_inference
         self.use_amp = use_amp
         self.num_heads = num_heads
@@ -630,18 +590,19 @@ class ParticleTransformer(nn.Module):
     def no_weight_decay(self):
         return {'cls_token', }
 
-    def forward(self, x, v=None, mask=None, uu=None, uu_idx=None, laman = False):
+    def forward(self, x, v=None, mask=None, uu=None, uu_idx=None, graph = None):
         # x: (N, C, P)
         # v: (N, 4, P) [px,py,pz,energy] from which we construct the interaction terms between pairs of particles
         # mask: (N, 1, P) -- real particle = 1, padded = 0
         # for pytorch: uu (N, C', num_pairs), uu_idx (N, 2, num_pairs): Sparce format for indexing the pairs  
         # for onnx: uu (N, C', P, P), uu_idx=None
 
+        batch_size, _, num_particles = x.size()
         with torch.no_grad():
             if not self.for_inference: # if training 
                 if uu_idx is not None:
                     uu = build_sparse_tensor(uu, uu_idx, x.size(-1)) # returns: (N, C', P, P)
-            x, v, mask, uu = self.trimmer(x, v, mask, uu)            # the default is trim = False so this does nothing  
+            x, v, mask, uu, graph = self.trimmer(x, v, mask, uu, graph)            # 
             padding_mask = ~mask.squeeze(1)                          # (N, P) and padded = 1, real particle = 0 now due to ~ (bitwise not)
 
         with torch.cuda.amp.autocast(enabled=self.use_amp): # if true it lowers the precision of some computations to half precision for faster computation
@@ -656,50 +617,13 @@ class ParticleTransformer(nn.Module):
             attn_mask = None
             if (v is not None or uu is not None) and self.pair_embed is not None:
                 attn_mask = self.pair_embed(v, uu).view(-1, v.size(-1), v.size(-1))  # (N*num_heads, P, P)
-
-            if laman: # filter the attn_mask with the laman_indices
-                # Masking operation based on the Laman Graph.
-                laman_indices = knn(v) # pass (px, py, pz, E) to knn so that it can then construct the Laman Graph based on the mod. of the knn algo. 
-
-                batch_size, num_particles, _ = laman_indices.shape
-                # Initialize a boolean mask with False (indicating no connection) for all pairs
-                bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
-
-                # Efficiently populate the boolean mask based on laman_indices
-                for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
-                    # Extract the current set of indices indicating connections
-                    current_indices = laman_indices[:, :, i]
-
-                    # Generate a batch and source particle indices to accompany current_indices for scatter_
-                    batch_indices = torch.arange(batch_size, device=attn_mask.device).view(-1, 1).expand(-1, num_particles)
-                    src_particle_indices = torch.arange(num_particles, device=attn_mask.device).expand(batch_size, -1)
-
-                    # Use scatter_ to update the bool_mask; setting the connection locations to True
-                    bool_mask[batch_indices, src_particle_indices, current_indices] = True
-
-                #print()
-                #print(f'laman_indices.shape: {laman_indices.shape}')
-                #print(f"laman_indices[0, :7, :]: {laman_indices[0, :7, :]}")
-
-                #print(f'bool_mask.shape: {bool_mask.shape}')
-                #print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
-                # Make the Laman Edges bidirectional 
-                bool_mask = bool_mask | bool_mask.transpose(1, 2)
-
-                bool_mask =  bool_mask.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, num_particles, num_particles).to(attn_mask.device)
-
-                attn_mask= torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
-
-                #print(f'attn_mask.shape: {attn_mask.shape}')
-
-                #print(f'bool_mask.shape: {bool_mask.shape}')
-
-                #print(f"bool_mask[0, :7, :7]: {bool_mask[0, :7, :7]}")
-                #print()
-                #print(f"attn_mask[0, :7, :7]: {attn_mask[0, :7, :7]}")
-                #print()
-                #print(f"attn_mask_laman[0, :7, :7]: {attn_mask_laman[0, :7, :7]}")
-                #time.sleep(10)
+            
+            # filter the attn_mask with the graph that was constructed in models.ParticleTransformer. Otherwise, full transformer is used.
+            if graph is not None:
+                bool_mask =  graph.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, 
+                                                                                        num_particles, num_particles).to(attn_mask.device)
+                   
+                attn_mask = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
 
             # transform
             for block in self.blocks:
@@ -719,4 +643,5 @@ class ParticleTransformer(nn.Module):
             if self.for_inference:
                 output = torch.softmax(output, dim=1)
             # print('output:\n', output)
+            #print(f"forward pass time: {time.time() - t_for}")
             return output
