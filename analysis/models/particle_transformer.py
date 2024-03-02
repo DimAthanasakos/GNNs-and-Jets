@@ -34,13 +34,12 @@ def laman_graph(x): # For now this is not used
     
     return indices
 
-def angles_laman(x, mask, angles = 0):
+def angles_laman(x, mask, angles = 0, pairwise_distance = None):
 
     batch_size, _, num_particles = mask.size()
     non_zero_particles = np.linalg.norm(x, axis=1) != 0
     valid_n = non_zero_particles.sum(axis = 1)
     
-
     # remove angles
     if angles < 0:
         angles = abs(angles)
@@ -68,24 +67,26 @@ def angles_laman(x, mask, angles = 0):
     
     # Add angles: For a particle i, add an edge to a particle j, where j < i, if there is no edge between i and j.
     elif angles > 0:
+        # Mask the positions of the current edges so to make sorting easier 
+        pairwise_distance[mask] = -float('inf')
         for b in range(batch_size):
             if valid_n[b] <= 3:
                 continue 
+            
+            # mask the padded particles, i.e n >= valid_n[b]
+            pairwise_distance[b, valid_n[b]:, :] = -float('inf')
+            pairwise_distance[b, :, valid_n[b]:] = -float('inf')
+
+            # Flatten the matrix
+            flat_matrix = pairwise_distance[b].flatten()
+            # Sort the flattened matrix
+            sorted_values, flat_sorted_indices = torch.sort(flat_matrix, descending = True)
+            # Convert flat indices to 2D row and column indices
+            row_indices, col_indices = flat_sorted_indices//num_particles, flat_sorted_indices%num_particles
 
             max_angles = math.comb(valid_n[b], 2) - (2*valid_n[b] - 3) # The maximum number of angles we can add until it becomes a fully connected graph
             
-            for i in range(min(angles, max_angles)):
-                index = random.randint(3, valid_n[b]-1) 
-                while np.argmax(~mask[b, index]) == index: # This is to ensure that we don't add an edge to a particle 
-                                                           # that is already connected to all other particles before it
-                    index = random.randint(3, valid_n[b]-1)  
-                
-                # the first False in the i-th row of the bool mask turned to True. 
-                while True: 
-                    connect = random.randint(0, index-1)
-                    if not mask[b, index, connect]:
-                        mask[b, index, connect] = True
-                        break
+            mask[b, row_indices[:min(angles, max_angles)], col_indices[:min(angles, max_angles)]] = True
                     
     return mask 
 
@@ -115,15 +116,19 @@ def knn(x, angles = 0):
     # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
     pairwise_distance = torch.tril(pairwise_distance, diagonal=2) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=3)  # -inf because topk indices return the biggest values -> we've made all distances negative 
 
+
     # Find the indices of the 2 nearest neighbors for each particle
         
-    idx = pairwise_distance.topk(k=2, dim=-1) # (batch_size, num_points, 2)
-    
-    idx = idx[1] # (batch_size, num_points, 2)
+    idx = pairwise_distance.topk(k=2, dim=-1) # It returns two things: values, indices 
+    idx = idx[1] # (batch_size, num_points - 3, 2)
         
     # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
     idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
     
+    # add 3 rows of -inf to the top of the pairwise_distance tensor to make it of shape (batch_size, num_particles, num_particles)
+    # this is because we remove the 3 hardest particles from the graph and we don't want to connect them to the rest of the particles
+    pairwise_distance = torch.cat((torch.ones((batch_size, 3, num_particles))*float('-inf'), pairwise_distance), dim=1)
+
     # Initialize a boolean mask with False (indicating no connection) for all pairs
     bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
 
@@ -146,7 +151,7 @@ def knn(x, angles = 0):
     bool_mask[:, 1, 2] = False
     
     # Remove some angles at random between the particles. Default value of angles = 0.
-    bool_mask = angles_laman(x, bool_mask, angles) 
+    bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
 
     # Make the Laman Edges bidirectional 
     bool_mask = bool_mask | bool_mask.transpose(1, 2)
@@ -326,7 +331,7 @@ class ParT():
                 graph = rand_graph(self.X_ParT)
             else: 
                 # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
-                chunk_size = 1024  # Adjust this based on your memory constraints and the size of self.X_ParT
+                chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
                 total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
                 chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
 
