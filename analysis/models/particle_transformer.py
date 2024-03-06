@@ -34,6 +34,65 @@ def laman_graph(x): # For now this is not used
     
     return indices
 
+
+def random_laman_graph(x): 
+    batch_size, _, num_particles = x.shape
+    # for each b in batch size, calculate the number of non-zero particles and permute them 
+    non_zero_particles = np.linalg.norm(x, axis=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1)
+    idx = np.zeros((batch_size, num_particles, 2))
+    # keep track of all perms so to remove the upper-triagonal part that stems from the first 3 particles forming a triangle
+    perms = []
+    for b in range(batch_size):
+        if valid_n[b] <= 3:
+            continue
+        permutation = np.random.permutation(valid_n[b])
+        perms.append(permutation)
+
+        # connect the 3 first particles that are permuted
+        idx[b, permutation[0] ] = [permutation[1], permutation[2]]
+        idx[b, permutation[1] ] = [permutation[0], permutation[2]]
+        idx[b, permutation[2] ] = [permutation[0], permutation[1]]
+        # connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j
+        for i in range(3, valid_n[b]):
+            # for each particle i, add an edge to 2 particles j < i, at random 
+            idx[b, permutation[i] ] = random.sample(list(permutation[:i]), 2)
+        # fill the rest of the indices with valid_n[b] - 1, valid_n[b] - 2
+        idx[b, valid_n[b]:] = [valid_n[b] - 1, valid_n[b] - 2]
+    
+    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
+
+    # Efficiently populate the boolean mask based on laman_indices
+    for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
+        # Extract the current set of indices indicating connections
+        current_indices = idx[:, :, i]
+
+        # Generate a batch and source particle indices to accompany current_indices for scatter_
+        batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
+        src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
+
+        # Use scatter_ to update the bool_mask; setting the connection locations to True
+        bool_mask[batch_indices, src_particle_indices, current_indices] = True
+
+    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
+    #mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0)
+    #bool_mask = bool_mask & mask_upper.unsqueeze(0)
+
+    # Remove some angles at random between the particles. Default value of angles = 0.
+    #bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
+
+    # Make the Laman Edges bidirectional 
+    bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
+    # TODO: Change this code to work with numpy from the start
+    bool_mask = bool_mask.numpy() 
+
+    return bool_mask 
+        
+
+
 def angles_laman(x, mask, angles = 0, pairwise_distance = None):
 
     batch_size, _, num_particles = mask.size()
@@ -144,12 +203,10 @@ def knn(x, angles = 0):
         # Use scatter_ to update the bool_mask; setting the connection locations to True
         bool_mask[batch_indices, src_particle_indices, current_indices] = True
 
-    # remove the entries at 01, 02, 12 to be consistent with the structure of the bool mask so far is a lower triangular matrix. 
-    # Those entries will be activated to True in bool_mask | bool_mask.transpose(1, 2)
-    bool_mask[:, 0, 1] = False
-    bool_mask[:, 0, 2] = False
-    bool_mask[:, 1, 2] = False
-    
+    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
+    mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0)
+    bool_mask = bool_mask & mask_upper.unsqueeze(0)
+
     # Remove some angles at random between the particles. Default value of angles = 0.
     bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
 
@@ -328,7 +385,7 @@ class ParT():
             print(f"self.X_ParT.shape = {self.X_ParT.shape}")
             t_st = time.time()
             if self.random_graph: 
-                graph = rand_graph(self.X_ParT)
+                graph = random_laman_graph(self.X_ParT)
             else: 
                 # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
                 chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
