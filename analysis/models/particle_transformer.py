@@ -13,6 +13,7 @@ import os
 import time
 import numpy as np
 import math 
+import sys
 
 import matplotlib.pyplot as plt
 import sklearn
@@ -34,6 +35,59 @@ def laman_graph(x): # For now this is not used
     
     return indices
 
+def nearest_neighbors(x):
+    x = torch.from_numpy(x) 
+
+    batch_size, _, num_particles = x.size()
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
+
+    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
+    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
+
+    # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
+    pairwise_distance = torch.tril(pairwise_distance) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'))  # -inf because topk indices return the biggest values -> we've made all distances negative 
+
+    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
+
+    # The non-padded particles for each jet
+    non_zero_particles = np.linalg.norm(x, axis=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1)
+
+    # Find the indices of the 2N-3 nearest neighbors for each jet and connect them: 
+    for b in range(batch_size):
+            if valid_n[b] <= 1:
+                continue 
+            
+            # mask the padded particles, i.e n >= valid_n[b]
+            pairwise_distance[b, valid_n[b]:, :] = -float('inf')
+            pairwise_distance[b, :, valid_n[b]:] = -float('inf')
+
+            # Flatten the matrix
+            flat_matrix = pairwise_distance[b].flatten()
+            # Sort the flattened matrix
+            sorted_values, flat_sorted_indices = torch.sort(flat_matrix, descending = True)
+            # Convert flat indices to 2D row and column indices
+            row_indices, col_indices = flat_sorted_indices//num_particles, flat_sorted_indices%num_particles
+            
+            angles = 2*valid_n[b] - 3 # The maximum number of angles we can add until it becomes a fully connected graph
+            
+            bool_mask[b, row_indices[:angles], col_indices[:angles]] = True
+
+    # Make the Laman Edges bidirectional 
+    bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
+    # TODO: Change this code to work with numpy from the start
+    bool_mask = bool_mask.numpy() 
+
+    return bool_mask 
 
 def random_laman_graph(x): 
     batch_size, _, num_particles = x.shape
@@ -92,7 +146,6 @@ def random_laman_graph(x):
     return bool_mask 
         
 
-
 def angles_laman(x, mask, angles = 0, pairwise_distance = None):
 
     batch_size, _, num_particles = mask.size()
@@ -142,7 +195,7 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
             sorted_values, flat_sorted_indices = torch.sort(flat_matrix, descending = True)
             # Convert flat indices to 2D row and column indices
             row_indices, col_indices = flat_sorted_indices//num_particles, flat_sorted_indices%num_particles
-
+            
             max_angles = math.comb(valid_n[b], 2) - (2*valid_n[b] - 3) # The maximum number of angles we can add until it becomes a fully connected graph
             
             mask[b, row_indices[:min(angles, max_angles)], col_indices[:min(angles, max_angles)]] = True
@@ -266,15 +319,6 @@ def rand_graph(x):
         # Convert edges to a sparse tensor
         # Edges and their transposes (since the graph is undirected)
         edge_indices = np.array(edges, dtype=np.int64).T
-        
-        try:
-            adjacency_matrices[b, :, :edge_indices.shape[1]] = edge_indices
-        except: 
-            print(f"b: {b}, edge_indices.shape: {edge_indices.shape}, adjacency_matrices.shape: {adjacency_matrices.shape}")
-            print(f"max_edges: {max_edges}, valid_n: {valid_n}, num_edges: {num_edges}")
-            print(f"x[b]: {x[b]}")
-            
-            #time.sleep(40)
   
     adjacency_matrices = edge_indices_to_boolean_adjacency(adjacency_matrices, n)
     
@@ -316,12 +360,6 @@ class ParT():
         
         self.load_model = model_info['model_settings']['load_model'] # Load a pre-trained model or not
         self.save_model = model_info['model_settings']['save_model'] # Save the model or not
-
-        if 'random_graph' in model_info['model_settings']: self.random_graph = model_info['model_settings']['random_graph']
-        else: self.random_graph = False
-        
-        if 'add_angles' in model_info['model_settings']: self.add_angles = model_info['model_settings']['add_angles']
-        else: self.add_angles = 0
       
         self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
         if self.input_dim not in [1, 4]:
@@ -333,9 +371,12 @@ class ParT():
 
         if model_info['model_key'].endswith('laman'):
             self.laman = True
+            self.graph_type = self.model_info['model_settings']['graph']
+            self.add_angles = model_info['model_settings']['add_angles']
         else: 
             self.laman = False
-
+            self.graph_type = None
+            self.add_angles = 0
         #if self.laman and self.input_dim == 4: 
         #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
             
@@ -384,15 +425,22 @@ class ParT():
 
             print(f"self.X_ParT.shape = {self.X_ParT.shape}")
             t_st = time.time()
-            if self.random_graph: 
+            if self.graph_type == 'laman_random_graph': 
                 graph = random_laman_graph(self.X_ParT)
-            else: 
+            
+            elif self.graph_type == 'laman_knn_graph': 
                 # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
                 chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
                 total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
                 chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
 
                 graph = np.concatenate([knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles) for i in range(chunks)])
+
+            elif self.graph_type == 'nearest_neighbors': 
+                graph = nearest_neighbors(self.X_ParT)
+
+            else: 
+                sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph' and 'nearest_neighbors'")
 
             print(f"Time to create the graph = {time.time() - t_st} seconds")
 

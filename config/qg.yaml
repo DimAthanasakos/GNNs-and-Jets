@@ -26,7 +26,7 @@ label_1: 'quark'
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
 #               particle_net, particle_net_laman, particle_transformer, particle_transformer_laman
-models: ['particle_transformer_laman']
+models: ['particle_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
@@ -41,18 +41,19 @@ particle_transformer:
 particle_transformer_laman:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 18
+    epochs: 10
     learning_rate: 0.001
     input_dim: 1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 
-    load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
-    save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    random_graph: False # if True, use random graphs. Else, use Laman graphs.
-    add_angles: 15    # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
-                      # The default is 0: When add_angles < 0 and  abs(add_angles)> n_particles^jet - 2, the graph will be disconnected, so in the code
-                      # we set remove_angles = min(remove_angles, n_particles^jet - 2) to avoid this issue. 
-                      # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
-                      # Conversely when add_angles > (n_particles^jet choose 2) - (2*n_particles^jet -3), the graph will be fully connected, so we stop there.
+    load_model: False   # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
+    save_model: False   # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
+    graph : 'nearest_neighbors' # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  'nearest_neighbors'
+    
+    add_angles: 5     # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
+                        # The default is 0: When add_angles < 0 and  abs(add_angles)> n_particles^jet - 2, the graph will be disconnected, so in the code
+                        # we set remove_angles = min(remove_angles, n_particles^jet - 2) to avoid this issue. 
+                        # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
+                        # Conversely when add_angles > (n_particles^jet choose 2) - (2*n_particles^jet -3), the graph will be fully connected, so we stop there.
                       
 particle_net:
     graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used as input. The graph is constructed in the architecture script
