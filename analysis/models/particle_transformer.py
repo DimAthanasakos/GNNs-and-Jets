@@ -51,6 +51,7 @@ def nearest_neighbors(x):
     pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
 
     # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
+    # This also avoids double-counting the same distance (ij and ji)
     pairwise_distance = torch.tril(pairwise_distance) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'))  # -inf because topk indices return the biggest values -> we've made all distances negative 
 
     # Initialize a boolean mask with False (indicating no connection) for all pairs
@@ -203,7 +204,7 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
     return mask 
 
 # Create a Laman Graph using a mod of the k nearest neighbors algorithm.
-def knn(x, angles = 0):   
+def laman_knn(x, angles = 0):   
     x = torch.from_numpy(x) 
 
     batch_size, _, num_particles = x.size()
@@ -225,6 +226,70 @@ def knn(x, angles = 0):
     # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
     pairwise_distance = pairwise_distance[:, 3:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
     
+    # Mask the diagonal 
+    pairwise_distance.fill_diagonal_(-float("inf"))
+
+    # Find the indices of the 2 nearest neighbors for each particle        
+    idx = pairwise_distance.topk(k=2, dim=-1) # It returns two things: values, indices 
+    idx = idx[1] # (batch_size, num_points, 2)
+        
+    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
+    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
+    
+    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
+
+    # Efficiently populate the boolean mask based on laman_indices
+    for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
+        # Extract the current set of indices indicating connections
+        current_indices = idx[:, :, i]
+
+        # Generate a batch and source particle indices to accompany current_indices for scatter_
+        batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
+        src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
+
+        # Use scatter_ to update the bool_mask; setting the connection locations to True
+        bool_mask[batch_indices, src_particle_indices, current_indices] = True
+
+    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
+    mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0)
+    bool_mask = bool_mask & mask_upper.unsqueeze(0)
+
+    # Remove some angles at random between the particles. Default value of angles = 0.
+    #bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
+
+    # Make the Laman Edges bidirectional 
+    bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+    true_counts = torch.sum(bool_mask, dim=(1,2))
+
+    # true_counts now contains the count of True elements for each batch
+    print(true_counts.shape)
+    time.sleep(10)
+
+
+    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
+    # TODO: Change this code to work with numpy from the start
+    bool_mask = bool_mask.numpy() 
+
+    return bool_mask 
+
+# Create a Laman Graph using a mod of the k nearest neighbors algorithm.
+def knn(x, angles = 0):   
+    x = torch.from_numpy(x) 
+
+    batch_size, _, num_particles = x.size()
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
+
+    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
+    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
+
     # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
     pairwise_distance = torch.tril(pairwise_distance, diagonal=2) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=3)  # -inf because topk indices return the biggest values -> we've made all distances negative 
 
@@ -271,6 +336,7 @@ def knn(x, angles = 0):
     bool_mask = bool_mask.numpy() 
 
     return bool_mask 
+
 
 
 def edge_indices_to_boolean_adjacency(adjacency_matrices, n):
@@ -425,19 +491,20 @@ class ParT():
 
             print(f"self.X_ParT.shape = {self.X_ParT.shape}")
             t_st = time.time()
+            
+            # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
+            chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
+            total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
+            chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
+
             if self.graph_type == 'laman_random_graph': 
-                graph = random_laman_graph(self.X_ParT)
+                graph = np.concatenate([random_laman_graph(self.X_ParT[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] )
             
             elif self.graph_type == 'laman_knn_graph': 
-                # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
-                chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
-                total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
-                chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
-
-                graph = np.concatenate([knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles) for i in range(chunks)])
+                graph = np.concatenate([laman_knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles) for i in range(chunks)])
 
             elif self.graph_type == 'nearest_neighbors': 
-                graph = nearest_neighbors(self.X_ParT)
+                graph = np.concatenate([nearest_neighbors(self.X_ParT[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
 
             else: 
                 sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph' and 'nearest_neighbors'")
