@@ -92,6 +92,8 @@ class PlotResults(common_base.CommonBase):
         plt.ylabel('True q Rate', fontsize=16)
         plt.grid(True)
         
+        #print(f"roc_list = {roc_list}")
+        print()
         for label,value in roc_list.items():
             if 'subjet' in label:
                 linewidth = 2
@@ -108,6 +110,19 @@ class PlotResults(common_base.CommonBase):
   
             FPR = value[0]
             TPR = value[1]
+            for index, val in enumerate(TPR):
+                if 0.499 < TPR[index] < 0.501: 
+                    print(f"TPR = {TPR[index]:.4f}")
+                    print(f"1/FPR (background rejection) = {1/FPR[index]:.4f}")  
+                    print()
+                    break
+            for index, val in enumerate(TPR):
+                if 0.799 < TPR[index] < 0.801: 
+                    print(f"TPR = {TPR[index]:.4f}")
+                    print(f"1/FPR (background rejection) = {1/FPR[index]:.4f}")  
+                    print()
+                    break
+
             plt.plot(FPR, TPR, linewidth=linewidth, label=label,
                      linestyle=linestyle, alpha=alpha, color=color)
                     

@@ -17,6 +17,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import sklearn
+import scipy
 
 import torch
 import networkx
@@ -203,6 +204,145 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
                     
     return mask 
 
+
+def shannon_entropy(adjacency_matrices, x):
+    batch_size, _, num_particles = x.shape
+    non_zero_particles = np.linalg.norm(x, axis=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1) 
+
+    valid_mask = np.arange(num_particles) < valid_n[:, None]
+    
+    # Use the mask to select elements from adjacency_matrices and sum to count neighbors
+    n_neighbors = np.where(valid_mask[:, :, None], adjacency_matrices, 0).sum(axis=2)
+    
+    # Adjust n_neighbors based on valid_n, setting counts to 1 beyond valid particles
+    # This step is no longer necessary as np.where and broadcasting handle the adjustment implicitly
+
+    # Compute Shannon entropy
+    # Avoid division by zero or log of zero by replacing non-valid n_neighbors with 1
+    n_neighbors[n_neighbors == 0] = 1
+    shannon_entropy_batch = np.log(n_neighbors).sum(axis=1) / valid_n / np.log(valid_n - 1)
+    shannon_entropy_batch = np.nan_to_num(shannon_entropy_batch)  # Handle divisions resulting in NaN
+    shannon_entropy = np.mean(shannon_entropy_batch)
+    print(f"Shannon Entropy = {shannon_entropy}")
+    print()
+
+    # count the number of neighbors for each particle 
+    #n_neighbors = np.zeros((batch_size, num_particles))
+    #for b in range(batch_size):
+    #    for i in range(valid_n[b]):
+    #        n_neighbors[b, i] = np.sum(adjacency_matrices[b, i, :valid_n[b]])   
+    #    for i in range(valid_n[b], num_particles):
+    #        n_neighbors[b, i] = 1 # we'll take the log of this later, so it wont contribute to the entropy
+
+    #shannon_entropy_batch = np.sum(np.log(n_neighbors), axis = 1) / valid_n/np.log(valid_n - 1)  
+    #shannon_entropy = np.mean(shannon_entropy_batch)
+    #print(f"Shannon Entropy = {shannon_entropy}")
+
+    return shannon_entropy
+
+def connected_components(adjacency_matrices, x):
+    batch_size, _, num_particles = x.shape
+    non_zero_particles = np.linalg.norm(x, axis=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1) 
+
+    # use scipy.sparse.csgraph.connected_components to calculate the connected components for each graph in the batch
+    connected_components = np.zeros((batch_size, num_particles))
+    avg_n_components = 0
+    for b in range(batch_size):
+        adjacency_matrix = adjacency_matrices[b, :valid_n[b], :valid_n[b]]
+        n_components, labels = scipy.sparse.csgraph.connected_components(adjacency_matrix, directed=False)
+        avg_n_components += n_components
+    # Average number of connected components
+    avg_n_components = avg_n_components / batch_size
+
+    print(f"Average number of connected components = {avg_n_components}")
+    print()
+    return 
+
+
+# Create a knn Graph  
+def knn(x, k, angles = 0): 
+    print()  
+    print(f"Constructing a pure knn graph with k = {k}")
+    print()
+    x = torch.from_numpy(x) 
+
+    batch_size, _, num_particles = x.size()
+
+    non_zero_particles = np.linalg.norm(x, axis=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1)
+
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
+
+    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
+    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
+
+    # Mask the diagonal 
+    # Create a mask for the diagonal elements across all matrices in the batch
+    eye_mask = torch.eye(num_particles, dtype=torch.bool).expand(batch_size, num_particles, num_particles)
+    pairwise_distance[eye_mask] = -float('inf')
+
+    # Mask all the padded particles, i.e. n >= valid_n[b]
+    # Create an indices tensor
+    indices = torch.arange(pairwise_distance.size(1), device=pairwise_distance.device).expand_as(pairwise_distance)
+
+    valid_n_tensor = torch.tensor(valid_n, device=pairwise_distance.device).unsqueeze(1).unsqueeze(2)
+
+    # Now you can use valid_n_tensor in your operation
+    mask_row = indices >= valid_n_tensor
+    mask_col = indices.transpose(-2, -1) >= valid_n_tensor
+
+    # Apply the masks
+    pairwise_distance[mask_row] = -float('inf')
+    pairwise_distance[mask_col] = -float('inf')
+
+    # Find the indices of the 2 nearest neighbors for each particle        
+    idx = pairwise_distance.topk(k=k, dim=-1) # It returns two things: values, indices 
+    idx = idx[1] # (batch_size, num_points, 2)
+    
+    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
+
+    # Efficiently populate the boolean mask based on laman_indices
+    for i in range(k):  # Assuming each particle is connected to two others as per laman_indices
+        # Extract the current set of indices indicating connections
+        current_indices = idx[:, :, i]
+
+        # Generate a batch and source particle indices to accompany current_indices for scatter_
+        batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
+        src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
+
+        # Use scatter_ to update the bool_mask; setting the connection locations to True
+        bool_mask[batch_indices, src_particle_indices, current_indices] = True
+
+    # Make the Edges bidirectional 
+    bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+    av = 0
+    for b in range(batch_size):
+        edges = torch.sum(bool_mask[b, :valid_n[b], :valid_n[b]], dim=(0,1)).item() / 2
+        av += edges / (2*valid_n[b]-3) 
+    av = av / batch_size
+    print(f"Average number of edges/2n-3 = {av}")
+    print()
+
+    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
+    # TODO: Change this code to work with numpy from the start
+    bool_mask = bool_mask.numpy() 
+
+    # Calculate the Shannon Entropy and the number of connected components
+    connected_components(bool_mask, x)
+    shannon_entropy(bool_mask, x)
+
+    return bool_mask 
+
 # Create a Laman Graph using a mod of the k nearest neighbors algorithm.
 def laman_knn(x, angles = 0):   
     x = torch.from_numpy(x) 
@@ -226,73 +366,8 @@ def laman_knn(x, angles = 0):
     # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
     pairwise_distance = pairwise_distance[:, 3:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
     
-    # Mask the diagonal 
-    pairwise_distance.fill_diagonal_(-float("inf"))
-
-    # Find the indices of the 2 nearest neighbors for each particle        
-    idx = pairwise_distance.topk(k=2, dim=-1) # It returns two things: values, indices 
-    idx = idx[1] # (batch_size, num_points, 2)
-        
-    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
-    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
-    
-    # Initialize a boolean mask with False (indicating no connection) for all pairs
-    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool)
-
-    # Efficiently populate the boolean mask based on laman_indices
-    for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
-        # Extract the current set of indices indicating connections
-        current_indices = idx[:, :, i]
-
-        # Generate a batch and source particle indices to accompany current_indices for scatter_
-        batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
-        src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
-
-        # Use scatter_ to update the bool_mask; setting the connection locations to True
-        bool_mask[batch_indices, src_particle_indices, current_indices] = True
-
-    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
-    mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0)
-    bool_mask = bool_mask & mask_upper.unsqueeze(0)
-
-    # Remove some angles at random between the particles. Default value of angles = 0.
-    #bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
-
-    # Make the Laman Edges bidirectional 
-    bool_mask = bool_mask | bool_mask.transpose(1, 2)
-
-    true_counts = torch.sum(bool_mask, dim=(1,2))
-
-    # true_counts now contains the count of True elements for each batch
-    print(true_counts.shape)
-    time.sleep(10)
-
-
-    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
-    # TODO: Change this code to work with numpy from the start
-    bool_mask = bool_mask.numpy() 
-
-    return bool_mask 
-
-# Create a Laman Graph using a mod of the k nearest neighbors algorithm.
-def knn(x, angles = 0):   
-    x = torch.from_numpy(x) 
-
-    batch_size, _, num_particles = x.size()
-    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
-
-    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
-    phi = torch.atan2(py, px)
-    
-    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
-
-    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
-    xx = torch.sum(x ** 2, dim=1, keepdim=True)
-    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
-
     # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
     pairwise_distance = torch.tril(pairwise_distance, diagonal=2) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=3)  # -inf because topk indices return the biggest values -> we've made all distances negative 
-
 
     # Find the indices of the 2 nearest neighbors for each particle
         
@@ -334,6 +409,10 @@ def knn(x, angles = 0):
     # transform to numpy. That's because we later transform everything on the dataset to pytorch 
     # TODO: Change this code to work with numpy from the start
     bool_mask = bool_mask.numpy() 
+
+    # Calculate the Shannon Entropy and the number of connected components
+    connected_components(bool_mask, x)
+    shannon_entropy(bool_mask, x)
 
     return bool_mask 
 
@@ -439,10 +518,14 @@ class ParT():
             self.laman = True
             self.graph_type = self.model_info['model_settings']['graph']
             self.add_angles = model_info['model_settings']['add_angles']
+            if self.graph_type == 'knn_graph': self.k = model_info['model_settings']['k']
+            else:  self.k = None
         else: 
             self.laman = False
             self.graph_type = None
             self.add_angles = 0
+
+
         #if self.laman and self.input_dim == 4: 
         #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
             
@@ -480,11 +563,20 @@ class ParT():
         # (E, px, py, pz) -> (px, py, pz, E)
         self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
         
-        # Transpose the data to match the ParticleNet architecture convention which is (batch_size, n_features, n_particles) 
+        # Transpose the data to match the ParticleNet/ParT architecture convention which is (batch_size, n_features, n_particles) 
         # instead of the current shape (batch_size, n_particles, n_features)
         self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
 
-        if self.laman:
+        train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, laman = self.laman)
+
+        return train_loader, val_loader, test_loader
+    
+
+    def load_data(self, X, Y, laman = False):
+        ''' 
+        Split the data into training, validation and test sets depending on the specifics of the model.
+        '''
+        if laman:
             # we need to sort based on pt for the Laman Graphs 
             sorted_indices = np.argsort( -(self.X_ParT[:, 0, :]**2 + self.X_ParT[:, 1, :]**2), axis=-1)
             self.X_ParT = np.take_along_axis(self.X_ParT, sorted_indices[:, np.newaxis, :], axis=2)
@@ -493,7 +585,7 @@ class ParT():
             t_st = time.time()
             
             # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
-            chunk_size = 10*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
+            chunk_size = 20*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
             total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
             chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
 
@@ -503,11 +595,15 @@ class ParT():
             elif self.graph_type == 'laman_knn_graph': 
                 graph = np.concatenate([laman_knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles) for i in range(chunks)])
 
-            elif self.graph_type == 'nearest_neighbors': 
+            elif self.graph_type == '2n3_nearest_neighbors': 
                 graph = np.concatenate([nearest_neighbors(self.X_ParT[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
-
+                
+            elif self.graph_type == 'knn_graph':
+                k = self.k
+                graph = np.concatenate([knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], k = k) for i in range(chunks)] )
+                
             else: 
-                sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph' and 'nearest_neighbors'")
+                sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
 
             print(f"Time to create the graph = {time.time() - t_st} seconds")
 
@@ -582,13 +678,25 @@ class ParT():
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr = learning_rate)
 
+        best_auc_test = 0
+        best_auc_val, best_roc_val = None, None 
+
         for epoch in range(1, epochs+1):
             print("--------------------------------")
             loss = self._train_part(self.train_loader, self.model, optimizer, criterion, laman = self.laman)
 
             auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, laman = self.laman)
             auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, laman = self.laman)
-                
+            
+            # Save the model with the best test AUC
+            if auc_test > best_auc_test:
+                best_auc_test = auc_test
+                best_auc_val = auc_val
+                best_roc_val = roc_val
+                # store the model with the best test AUC
+                if self.save_model:
+                    best_model_params = self.model.state_dict()
+
             if (epoch)%5 == 0:
                 auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, laman = self.laman)
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
@@ -598,16 +706,17 @@ class ParT():
         time_end = time.time()
         print("--------------------------------")
         print()
-        print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs} seconds")
+        print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs:.1f} seconds")
         print()
+        print(f"Best AUC on the test set = {best_auc_test:.4f}")
+        print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
         print()
-        
         if self.save_model:
             path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
             print(f"Saving model to {path}")
-            torch.save(self.model.state_dict(), path) 
+            torch.save(best_model_params, path) 
         
-        return auc_test, roc_test
+        return best_auc_val, best_roc_val
 
         
     #---------------------------------------------------------------

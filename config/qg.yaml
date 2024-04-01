@@ -12,9 +12,9 @@
 #------------------------------------------------------------------
 
 # Size of labeled data to load (i.e. number of jets)
-n_train: 1600000
-n_val:   200000
-n_test:  200000
+n_train: 800
+n_val:   100
+n_test:  100
 
 # Which subjet collections to use
 subjet_basis: 'inclusive'
@@ -25,15 +25,15 @@ label_0: 'gluon'
 label_1: 'quark'
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
-#               particle_net, particle_net_laman, particle_transformer, particle_transformer_laman
-models: ['particle_transformer']
+#               particle_transformer, particle_net_laman, particle_transformer, particle_transformer_laman
+models: ['particle_transformer_laman']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
     epochs: 18
     learning_rate: 0.001
-    input_dim: 1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
+    input_dim: 4 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
     load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
@@ -41,15 +41,16 @@ particle_transformer:
 particle_transformer_laman:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 10
+    epochs: 5
     learning_rate: 0.001
     input_dim: 1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 
     load_model: False   # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False   # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    graph : 'nearest_neighbors' # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  'nearest_neighbors'
+    graph : 'knn_graph' # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
+    k : 2 # Number of nearest neighbors to consider in the graph construction. ONLY USED WITH graph = 'knn_graph'
     
-    add_angles: 5     # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
+    add_angles: 0     # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
                         # The default is 0: When add_angles < 0 and  abs(add_angles)> n_particles^jet - 2, the graph will be disconnected, so in the code
                         # we set remove_angles = min(remove_angles, n_particles^jet - 2) to avoid this issue. 
                         # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
