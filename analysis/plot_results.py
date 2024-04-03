@@ -112,16 +112,20 @@ class PlotResults(common_base.CommonBase):
             TPR = value[1]
             for index, val in enumerate(TPR):
                 if 0.499 < TPR[index] < 0.501: 
-                    print(f"TPR = {TPR[index]:.4f}")
-                    print(f"1/FPR (background rejection) = {1/FPR[index]:.4f}")  
+                    print(f"At TPR: {TPR[index]:.4f}, 1/FPR (background rejection) = {1/FPR[index]:.4f}")
                     print()
                     break
+            else: 
+                print(f'Not enough datapoints to calculate TPR = 0.5')
+                print()
+
             for index, val in enumerate(TPR):
                 if 0.799 < TPR[index] < 0.801: 
-                    print(f"TPR = {TPR[index]:.4f}")
-                    print(f"1/FPR (background rejection) = {1/FPR[index]:.4f}")  
+                    print(f"At TPR: {TPR[index]:.4f}, 1/FPR (background rejection) = {1/FPR[index]:.4f}")
                     print()
                     break
+            else: 
+                print(f"Not enough datapoints to calculate TPR = 0.8")
 
             plt.plot(FPR, TPR, linewidth=linewidth, label=label,
                      linestyle=linestyle, alpha=alpha, color=color)

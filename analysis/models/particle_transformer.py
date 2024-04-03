@@ -221,23 +221,12 @@ def shannon_entropy(adjacency_matrices, x):
     # Compute Shannon entropy
     # Avoid division by zero or log of zero by replacing non-valid n_neighbors with 1
     n_neighbors[n_neighbors == 0] = 1
-    shannon_entropy_batch = np.log(n_neighbors).sum(axis=1) / valid_n / np.log(valid_n - 1)
+    epsilon = 1e-8
+    shannon_entropy_batch = np.log(n_neighbors).sum(axis=1) / ( valid_n + epsilon ) / np.log(valid_n - 1 + epsilon)
     shannon_entropy_batch = np.nan_to_num(shannon_entropy_batch)  # Handle divisions resulting in NaN
     shannon_entropy = np.mean(shannon_entropy_batch)
     print(f"Shannon Entropy = {shannon_entropy}")
     print()
-
-    # count the number of neighbors for each particle 
-    #n_neighbors = np.zeros((batch_size, num_particles))
-    #for b in range(batch_size):
-    #    for i in range(valid_n[b]):
-    #        n_neighbors[b, i] = np.sum(adjacency_matrices[b, i, :valid_n[b]])   
-    #    for i in range(valid_n[b], num_particles):
-    #        n_neighbors[b, i] = 1 # we'll take the log of this later, so it wont contribute to the entropy
-
-    #shannon_entropy_batch = np.sum(np.log(n_neighbors), axis = 1) / valid_n/np.log(valid_n - 1)  
-    #shannon_entropy = np.mean(shannon_entropy_batch)
-    #print(f"Shannon Entropy = {shannon_entropy}")
 
     return shannon_entropy
 
@@ -255,14 +244,15 @@ def connected_components(adjacency_matrices, x):
         avg_n_components += n_components
     # Average number of connected components
     avg_n_components = avg_n_components / batch_size
-
+    
+    print()
     print(f"Average number of connected components = {avg_n_components}")
     print()
     return 
 
 
 # Create a knn Graph  
-def knn(x, k, angles = 0): 
+def knn(x, k, angles = 0, extra_info = False): 
     print()  
     print(f"Constructing a pure knn graph with k = {k}")
     print()
@@ -338,13 +328,14 @@ def knn(x, k, angles = 0):
     bool_mask = bool_mask.numpy() 
 
     # Calculate the Shannon Entropy and the number of connected components
-    connected_components(bool_mask, x)
-    shannon_entropy(bool_mask, x)
+    if extra_info:
+        connected_components(bool_mask, x)
+        shannon_entropy(bool_mask, x)
 
     return bool_mask 
 
 # Create a Laman Graph using a mod of the k nearest neighbors algorithm.
-def laman_knn(x, angles = 0):   
+def laman_knn(x, angles = 0, extra_info = False):   
     x = torch.from_numpy(x) 
 
     batch_size, _, num_particles = x.size()
@@ -410,9 +401,10 @@ def laman_knn(x, angles = 0):
     # TODO: Change this code to work with numpy from the start
     bool_mask = bool_mask.numpy() 
 
-    # Calculate the Shannon Entropy and the number of connected components
-    connected_components(bool_mask, x)
-    shannon_entropy(bool_mask, x)
+    if extra_info:
+        # Calculate the Shannon Entropy and the number of connected components
+        connected_components(bool_mask, x)
+        shannon_entropy(bool_mask, x)
 
     return bool_mask 
 
@@ -493,7 +485,6 @@ class ParT():
                                 'subjet_graphs_dict': dictionary of subjet graphs
         '''
         self.model_info = model_info
-        
     
         self.torch_device = model_info['torch_device']
         self.output_dir = model_info['output_dir']
@@ -514,19 +505,22 @@ class ParT():
                                                                               # If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ),
                                                                               # if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
 
-        if model_info['model_key'].endswith('laman'):
-            self.laman = True
+        if model_info['model_key'].endswith('graph'): # Graph-Transfomer, e.g. Laman Graph or a KNN Graph
+            self.graph_transformer = True
             self.graph_type = self.model_info['model_settings']['graph']
             self.add_angles = model_info['model_settings']['add_angles']
             if self.graph_type == 'knn_graph': self.k = model_info['model_settings']['k']
             else:  self.k = None
-        else: 
-            self.laman = False
+            if self.graph_type == 'laman_knn_graph': self.sorting_key = model_info['model_settings']['sorting_key']
+            else:  self.sorting_key = 'pt'
+                
+        else:                                         # Vanilla Particle Transformer
+            self.graph_transformer = False
             self.graph_type = None
             self.add_angles = 0
 
 
-        #if self.laman and self.input_dim == 4: 
+        #if self.graph_transformer and self.input_dim == 4: 
         #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
             
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
@@ -567,40 +561,63 @@ class ParT():
         # instead of the current shape (batch_size, n_particles, n_features)
         self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
 
-        train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, laman = self.laman)
+        train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
 
         return train_loader, val_loader, test_loader
     
 
-    def load_data(self, X, Y, laman = False):
+    def load_data(self, X, Y, graph_transformer = False, sorting_key = None):
         ''' 
         Split the data into training, validation and test sets depending on the specifics of the model.
         '''
-        if laman:
-            # we need to sort based on pt for the Laman Graphs 
-            sorted_indices = np.argsort( -(self.X_ParT[:, 0, :]**2 + self.X_ParT[:, 1, :]**2), axis=-1)
-            self.X_ParT = np.take_along_axis(self.X_ParT, sorted_indices[:, np.newaxis, :], axis=2)
+        if graph_transformer:
+            print()
+            print(f"Sorting the particles based on the {sorting_key} key.")
+            # Sort the particles based on the sorting key
+            if sorting_key in ['angularity_increasing', 'angularity_decreasing']:
+                px, py, pz, energy = X[:, 0:1, :], X[:, 1:2, :], X[:, 2:3, :], X[:, 3:4, :]
 
-            print(f"self.X_ParT.shape = {self.X_ParT.shape}")
+                rapidity = 0.5 * np.log(1 + (2 * pz) / np.clip(energy - pz, a_min=1e-20, a_max=None))
+                phi = np.arctan2(py, px)
+                dr = np.sqrt(rapidity**2 + phi**2)
+                
+                decreasing = True if sorting_key == 'angularity_decreasing' else False 
+                sorting_condition =  (X[:, 0:1, :]**2 + X[:, 1:2, :]**2)*dr * (-1 if decreasing else +1)  # The zero-padded particles will have sorting_condition = 0
+                
+                if not decreasing: 
+                    # we have to be careful with the zero-padded particles. We want them to be at the end of the sorted array 
+                    condition = np.linalg.norm(X, axis=1) == 0
+                    condition = condition[:, np.newaxis, :]
+                    sorting_condition = np.where(condition, float("inf"), sorting_condition)
+                    
+                sorted_indices = np.argsort( sorting_condition , axis=-1)
+                #X = np.take_along_axis(X, sorted_indices, axis=2)
+
+            # Sort by 'pt' (also the default option)
+            else:
+                # we need to sort based on pt for the Laman Graphs 
+                sorted_indices = np.argsort( -(X[:, 0, :]**2 + X[:, 1, :]**2), axis=-1)[:, np.newaxis, :]
+            X = np.take_along_axis(X, sorted_indices, axis=-1)
+
             t_st = time.time()
             
             # We need to constuct the graph in chunks to avoid memory issues when n_total > 10^6
             chunk_size = 20*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
-            total_size = self.X_ParT.shape[0]  # Assuming the first dimension is the batch size
+            total_size = X.shape[0]  # Assuming the first dimension is the batch size
             chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
 
             if self.graph_type == 'laman_random_graph': 
-                graph = np.concatenate([random_laman_graph(self.X_ParT[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] )
+                graph = np.concatenate([random_laman_graph(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] )
             
             elif self.graph_type == 'laman_knn_graph': 
-                graph = np.concatenate([laman_knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles) for i in range(chunks)])
+                graph = np.concatenate([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)])
 
             elif self.graph_type == '2n3_nearest_neighbors': 
-                graph = np.concatenate([nearest_neighbors(self.X_ParT[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
+                graph = np.concatenate([nearest_neighbors(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
                 
             elif self.graph_type == 'knn_graph':
                 k = self.k
-                graph = np.concatenate([knn(self.X_ParT[i * chunk_size:(i + 1) * chunk_size], k = k) for i in range(chunks)] )
+                graph = np.concatenate([knn(X[i * chunk_size:(i + 1) * chunk_size], k = k, extra_info=True if i==0 else False) for i in range(chunks)] )
                 
             else: 
                 sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
@@ -608,7 +625,7 @@ class ParT():
             print(f"Time to create the graph = {time.time() - t_st} seconds")
 
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
-            graph_train, graph_val, graph_test) = energyflow.utils.data_split(self.X_ParT, self.Y_ParT, graph,
+            graph_train, graph_val, graph_test) = energyflow.utils.data_split(X, Y, graph,
                                                                               val=self.n_val, test=self.n_test, shuffle = False)
 
             # Data loader   
@@ -622,8 +639,9 @@ class ParT():
             test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
             test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, shuffle=True)
 
+        # For the case of Vanilla Particle Transformer
         else: 
-            (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(self.X_ParT, self.Y_ParT,
+            (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
                                                                                                                                val=self.n_val, test=self.n_test)
                          
             # Data loader   
@@ -683,10 +701,10 @@ class ParT():
 
         for epoch in range(1, epochs+1):
             print("--------------------------------")
-            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, laman = self.laman)
+            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, laman = self.graph_transformer)
 
-            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, laman = self.laman)
-            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, laman = self.laman)
+            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, laman = self.graph_transformer)
+            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, laman = self.graph_transformer)
             
             # Save the model with the best test AUC
             if auc_test > best_auc_test:
@@ -698,7 +716,7 @@ class ParT():
                     best_model_params = self.model.state_dict()
 
             if (epoch)%5 == 0:
-                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, laman = self.laman)
+                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, laman = self.graph_transformer)
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
             else:
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
