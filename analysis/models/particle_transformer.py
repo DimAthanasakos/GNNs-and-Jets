@@ -25,6 +25,7 @@ import energyflow
 from analysis.architectures import ParticleTransformer  
 import random
 
+from dataloader import read_file
 
 def laman_graph(x): # For now this is not used 
     batch_size, _, seq_len = x.shape
@@ -529,7 +530,36 @@ class ParT():
 
     #---------------------------------------------------------------
     def init_data(self):
+        load_jetclass = False 
+        if load_jetclass:
+            x_particles, x_jet, y = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZToQQ_000.root', )
+            print('x_particles.shape = ', x_particles.shape)
+            print('x_jet.shape = ', x_jet.shape)
+            print('y.shape = ', y.shape)
+            print()
+            # find out the values of the y labels 
 
+            print('y[:5] = ', y[:5])
+            print()
+            print(f'x[0,0, :50] = {x_particles[0,0, :50]}')
+            print()
+            time.sleep(5)
+            x_particles, x_jet, y = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZJetsToNuNu_000.root', )
+            print('x_particles.shape = ', x_particles.shape)
+            print('x_jet.shape = ', x_jet.shape)
+            print('y.shape = ', y.shape)
+            print()
+            # find out the values of the y labels 
+
+            print('y[:5] = ', y[:5])
+            print()
+            print(f'x[0,0, :50] = {x_particles[0,0, :50]}')
+
+            time.sleep(5)
+
+
+
+            
         # Note: Currently we are only supporting the quark vs gluon dataset from the energyflow package. We can easily modify
         # the code to support our own Z vs qcd dataset as well.
         
@@ -591,7 +621,6 @@ class ParT():
                     sorting_condition = np.where(condition, float("inf"), sorting_condition)
                     
                 sorted_indices = np.argsort( sorting_condition , axis=-1)
-                #X = np.take_along_axis(X, sorted_indices, axis=2)
 
             # Sort by 'pt' (also the default option)
             else:
