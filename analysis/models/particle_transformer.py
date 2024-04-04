@@ -530,44 +530,43 @@ class ParT():
 
     #---------------------------------------------------------------
     def init_data(self):
-        load_jetclass = False 
+        load_jetclass = True 
         if load_jetclass:
-            x_particles, x_jet, y = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZToQQ_000.root', )
-            print('x_particles.shape = ', x_particles.shape)
-            print('x_jet.shape = ', x_jet.shape)
-            print('y.shape = ', y.shape)
-            print()
-            # find out the values of the y labels 
+            # Each file contains 100k jets for each class
+            x_particles_Z, x_jet_Z, y_Z = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZToQQ_000.root', labels = ['label_Zqq', 'label_QCD'])
+            x_particles_qcd, x_jet_qcd, y_qcd = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZJetsToNuNu_000.root', labels=['label_Zqq', 'label_QCD'])
+         
+            # concatenate the two datasets 
+            self.X_ParT = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
+            self.Y_ParT = np.concatenate((y_Z, y_qcd), axis = 0)
 
-            print('y[:5] = ', y[:5])
-            print()
-            print(f'x[0,0, :50] = {x_particles[0,0, :50]}')
-            print()
-            time.sleep(5)
-            x_particles, x_jet, y = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZJetsToNuNu_000.root', )
-            print('x_particles.shape = ', x_particles.shape)
-            print('x_jet.shape = ', x_jet.shape)
-            print('y.shape = ', y.shape)
-            print()
-            # find out the values of the y labels 
-
-            print('y[:5] = ', y[:5])
-            print()
-            print(f'x[0,0, :50] = {x_particles[0,0, :50]}')
-
-            time.sleep(5)
-
-
-
+            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding
             
-        # Note: Currently we are only supporting the quark vs gluon dataset from the energyflow package. We can easily modify
-        # the code to support our own Z vs qcd dataset as well.
-        
-        # Load the four-vectors directly from the quark vs gluon data set
-        self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                        generator='pythia',  # Herwig is also available
-                                                        with_bc=False        # Turn on to enable heavy quarks
-                                                       )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+            # trim to self.n_total jets
+            n = self.n_total // 2
+            self.X_ParT = np.concatenate((self.X_ParT[:n], self.X_ParT[-n:]), axis = 0)
+            self.Y_ParT = np.concatenate((self.Y_ParT[:n], self.Y_ParT[-n:]), axis = 0)
+            print()
+            print('self.Y_ParT.shape = ', self.Y_ParT.shape)
+            print('self.X_ParT.shape = ', self.X_ParT.shape)
+            print()
+            print(f'self.Y_ParT[:5] = {self.Y_ParT[:5]}')
+            print(f'self.Y_ParT[-5:] = {self.Y_ParT[-5:]}')
+
+            print()
+            # print how many jets of each class we have
+            print(f'Number of jets in the Zqq class = {np.sum(self.Y_ParT == 0)}')
+            print(f'Number of jets in the QCD class = {np.sum(self.Y_ParT == 1)}')
+            print()
+            # match the shape of the data to the shape of the energyflow data for consistency
+            self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
+
+        else: 
+            # Load the four-vectors directly from the quark vs gluon data set
+            self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
+                                                            generator='pythia',  # Herwig is also available
+                                                            with_bc=False        # Turn on to enable heavy quarks
+                                                        )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
 
         # Preprocess by centering jets and normalizing pts
         for x_ParT in self.X_ParT:
@@ -576,13 +575,15 @@ class ParT():
             x_ParT[mask,1:3] -= yphi_avg
             x_ParT[mask,0] /= x_ParT[:,0].sum()
 
+        # Delete the last-column (pid or masses or E) of the particles
+        self.X_ParT = self.X_ParT[:,:,:3]
 
         # TODO:
         # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
         # The input terms for each particle are left as given in the ParticleTransformer architecture.
             
         # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
-        self.X_ParT = energyflow.p4s_from_ptyphipids(self.X_ParT, error_on_unknown = True)
+        self.X_ParT = energyflow.p4s_from_ptyphims(self.X_ParT)
 
         # (E, px, py, pz) -> (px, py, pz, E)
         self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
@@ -606,8 +607,8 @@ class ParT():
             # Sort the particles based on the sorting key
             if sorting_key in ['angularity_increasing', 'angularity_decreasing']:
                 px, py, pz, energy = X[:, 0:1, :], X[:, 1:2, :], X[:, 2:3, :], X[:, 3:4, :]
-
-                rapidity = 0.5 * np.log(1 + (2 * pz) / np.clip(energy - pz, a_min=1e-20, a_max=None))
+                
+                rapidity = 0.5 * np.log(1 + (2 * pz) / np.clip(energy - pz, a_min=1e-10, a_max=None))
                 phi = np.arctan2(py, px)
                 dr = np.sqrt(rapidity**2 + phi**2)
                 
@@ -626,6 +627,7 @@ class ParT():
             else:
                 # we need to sort based on pt for the Laman Graphs 
                 sorted_indices = np.argsort( -(X[:, 0, :]**2 + X[:, 1, :]**2), axis=-1)[:, np.newaxis, :]
+
             X = np.take_along_axis(X, sorted_indices, axis=-1)
 
             t_st = time.time()
@@ -655,7 +657,7 @@ class ParT():
 
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
             graph_train, graph_val, graph_test) = energyflow.utils.data_split(X, Y, graph,
-                                                                              val=self.n_val, test=self.n_test, shuffle = False)
+                                                                              val=self.n_val, test=self.n_test, shuffle = True)
 
             # Data loader   
         
@@ -705,9 +707,9 @@ class ParT():
         print()
 
         if self.load_model:
-            self.path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+            self.path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
             print(f"Loading pre-trained model from {self.path}")
-            model.load_state_dict(torch.load(self.path))
+            model.load_state_dict(torch.load(self.path, map_location=self.torch_device))
     
         return model 
 
@@ -730,10 +732,10 @@ class ParT():
 
         for epoch in range(1, epochs+1):
             print("--------------------------------")
-            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, laman = self.graph_transformer)
+            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, graph_transformer = self.graph_transformer)
 
-            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, laman = self.graph_transformer)
-            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, laman = self.graph_transformer)
+            auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, graph_transformer = self.graph_transformer)
+            auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, graph_transformer = self.graph_transformer)
             
             # Save the model with the best test AUC
             if auc_test > best_auc_test:
@@ -745,7 +747,7 @@ class ParT():
                     best_model_params = self.model.state_dict()
 
             if (epoch)%5 == 0:
-                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, laman = self.graph_transformer)
+                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, graph_transformer = self.graph_transformer)
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
             else:
                 print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
@@ -759,7 +761,7 @@ class ParT():
         print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
         print()
         if self.save_model:
-            path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+            path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
             print(f"Saving model to {path}")
             torch.save(best_model_params, path) 
         
@@ -767,7 +769,7 @@ class ParT():
 
         
     #---------------------------------------------------------------
-    def _train_part(self, train_loader, model, optimizer, criterion, laman = False):
+    def _train_part(self, train_loader, model, optimizer, criterion, graph_transformer = False):
 
         model.train() # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
                                   # that behave differently in training mode vs eval mode (which is the default)
@@ -779,7 +781,8 @@ class ParT():
             inputs, labels = data[0], data[1]
             inputs = inputs.to(self.torch_device)
             labels = labels.to(self.torch_device) 
-            if laman:
+            
+            if graph_transformer:
                 graph = data[2].to(self.torch_device)
             else: 
                 graph = None
@@ -807,7 +810,7 @@ class ParT():
 
     #---------------------------------------------------------------
     @torch.no_grad()
-    def _test_part(self, test_loader, model, laman = False):
+    def _test_part(self, test_loader, model, graph_transformer = False):
         model.eval()
 
         all_labels = []
@@ -817,20 +820,15 @@ class ParT():
             inputs, labels = data[0], data[1]
             inputs = inputs.to(self.torch_device)
             labels = labels.to(self.torch_device) 
-            if laman:
+            
+            if graph_transformer:
                 graph = data[2].to(self.torch_device)
             else: 
                 graph = None
 
-
             # create pt of each particle instead of (px, py, pz, E) for the input 
             pt = torch.sqrt(inputs[:, 0, :]**2 + inputs[:, 1, :]**2)
             pt = pt.unsqueeze(1).clamp(min=10**-8)
-
-            #if laman: # sort the particles by pt. Required for Laman Graphs which are constructed in the architecture.ParticleTransformer script
-            #    pt, indices = torch.sort(pt, dim = 2, descending = True)
-            #    # Gather inputs according to the sorted indices along the particles dimension
-            #    inputs = torch.gather(inputs, dim=2, index=indices.expand_as(inputs))
 
             outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, graph = graph)
 

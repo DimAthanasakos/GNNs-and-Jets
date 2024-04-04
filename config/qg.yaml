@@ -12,9 +12,9 @@
 #------------------------------------------------------------------
 
 # Size of labeled data to load (i.e. number of jets)
-n_train: 1600000
-n_val:   200000
-n_test:  200000
+n_train: 20000
+n_val:   5000
+n_test:  5000
 
 # Which subjet collections to use
 subjet_basis: 'inclusive'
@@ -41,7 +41,7 @@ particle_transformer:
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 18
+    epochs: 15
     learning_rate: 0.001
     input_dim: 1                         # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 
@@ -49,7 +49,7 @@ particle_transformer_graph:
     save_model: False                    # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
     graph : 'laman_knn_graph'            # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
     k : 2                                # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
-    sorting_key: 'angularity_decreasing' # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph. 
+    sorting_key: 'pt' # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph. 
                                          # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
 
     add_angles: 0       # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
