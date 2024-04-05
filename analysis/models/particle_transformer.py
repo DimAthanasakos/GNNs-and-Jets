@@ -14,6 +14,7 @@ import time
 import numpy as np
 import math 
 import sys
+import glob
 
 import matplotlib.pyplot as plt
 import sklearn
@@ -489,6 +490,10 @@ class ParT():
     
         self.torch_device = model_info['torch_device']
         self.output_dir = model_info['output_dir']
+        self.classification_task = model_info['classification_task']
+        if self.classification_task not in ['ZvsQCD', 'qvsg']: 
+            sys.exit('Invalid classification task. Choose between ZvsQCD and qvsg. For the potential extension to other tasks, please check dataloader.py and modify the code accordingly.')
+        
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
         self.n_test = model_info['n_test']
@@ -530,43 +535,71 @@ class ParT():
 
     #---------------------------------------------------------------
     def init_data(self):
-        load_jetclass = True 
-        if load_jetclass:
+        # Choose the dataset to load
+        # The jetclass dataset origin: https://github.com/jet-universe/particle_transformer 
+        # It has 10 different classes of jets, each class has 10M jets. 
+        # Currently we are using the Z vs QCD dataset. For more details on the classes of jets look at the dataloader.py script and the 
+        # github repository mentioned above.
+
+        if self.classification_task == 'ZvsQCD':
             # Each file contains 100k jets for each class
-            x_particles_Z, x_jet_Z, y_Z = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZToQQ_000.root', labels = ['label_Zqq', 'label_QCD'])
-            x_particles_qcd, x_jet_qcd, y_qcd = read_file(filepath = '/pscratch/sd/d/dimathan/JetClass_Dataset_1/ZJetsToNuNu_000.root', labels=['label_Zqq', 'label_QCD'])
-         
+            nz = nqcd = self.n_total // 2 
+
+            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+            Z_jet_filepattern=  f"{directory_path}/ZToQQ*"
+            QCD_jet_filepattern = f"{directory_path}/ZJetsToNuNu*"
+            # read all files with those patterns in '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+            # Getting the list of files that match the patterns
+            Z_jet_files = glob.glob(Z_jet_filepattern)
+            QCD_jet_files = glob.glob(QCD_jet_filepattern)
+
+            print()
+            print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
+            print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
+            print()
+
+            x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
+            for file in Z_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                x_particles_Z = np.concatenate((x_particles_Z, x_particles), axis = 0) if x_particles_Z.size else x_particles
+                x_jet_Z = np.concatenate((x_jet_Z, x_jet), axis = 0) if x_jet_Z.size else x_jet
+                y_Z = np.concatenate((y_Z, y), axis = 0) if y_Z.size else y
+                if x_particles_Z.shape[0] >= nz: 
+                    x_particles_Z = x_particles_Z[:nz]
+                    x_jet_Z = x_jet_Z[:nz]
+                    y_Z = y_Z[:nz]
+                    break # Stop reading files if we have enough jets
+            
+            x_particles_qcd, x_jet_qcd, y_qcd = np.array([]), np.array([]), np.array([])
+            for file in QCD_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                x_particles_qcd = np.concatenate((x_particles_qcd, x_particles), axis = 0) if x_particles_qcd.size else x_particles
+                x_jet_qcd = np.concatenate((x_jet_qcd, x_jet), axis = 0) if x_jet_qcd.size else x_jet
+                y_qcd = np.concatenate((y_qcd, y), axis = 0) if y_qcd.size else y
+                if x_particles_qcd.shape[0] >= nqcd: 
+                    x_particles_qcd = x_particles_qcd[:nqcd]
+                    x_jet_qcd = x_jet_qcd[:nqcd]
+                    y_qcd = y_qcd[:nqcd]
+                    break
+
             # concatenate the two datasets 
             self.X_ParT = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
             self.Y_ParT = np.concatenate((y_Z, y_qcd), axis = 0)
 
-            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding
-            
-            # trim to self.n_total jets
-            n = self.n_total // 2
-            self.X_ParT = np.concatenate((self.X_ParT[:n], self.X_ParT[-n:]), axis = 0)
-            self.Y_ParT = np.concatenate((self.Y_ParT[:n], self.Y_ParT[-n:]), axis = 0)
+            # print how many jets we've loaded 
             print()
-            print('self.Y_ParT.shape = ', self.Y_ParT.shape)
-            print('self.X_ParT.shape = ', self.X_ParT.shape)
+            print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
             print()
-            print(f'self.Y_ParT[:5] = {self.Y_ParT[:5]}')
-            print(f'self.Y_ParT[-5:] = {self.Y_ParT[-5:]}')
-
-            print()
-            # print how many jets of each class we have
-            print(f'Number of jets in the Zqq class = {np.sum(self.Y_ParT == 0)}')
-            print(f'Number of jets in the QCD class = {np.sum(self.Y_ParT == 1)}')
-            print()
+            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
             # match the shape of the data to the shape of the energyflow data for consistency
             self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
 
-        else: 
+        elif self.classification_task == 'qvsg': 
             # Load the four-vectors directly from the quark vs gluon data set
             self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
                                                             generator='pythia',  # Herwig is also available
                                                             with_bc=False        # Turn on to enable heavy quarks
-                                                        )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+                                                        )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
 
         # Preprocess by centering jets and normalizing pts
         for x_ParT in self.X_ParT:

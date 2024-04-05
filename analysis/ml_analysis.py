@@ -59,7 +59,10 @@ class MLAnalysis(common_base.CommonBase):
         # Read config file
         with open(self.config_file, 'r') as stream:
           config = yaml.safe_load(stream)
-          
+        
+        # Which Classification task 
+        self.classification_task = config['classification_task']
+
         self.n_train = config['n_train']
         self.n_val = config['n_val']
         self.n_test = config['n_test']
@@ -67,18 +70,6 @@ class MLAnalysis(common_base.CommonBase):
         self.test_frac = 1. * self.n_test / self.n_total
         self.val_frac  = 1. * self.n_val /  self.n_total
 
-        self.label_0 = config['label_0']
-        self.label_1 = config['label_1']
-
-        # Subjet Basis
-        self.r_list = config['r']
-        self.subjet_basis = config['subjet_basis']
-        if self.subjet_basis == 'exclusive': # For 'exclusive' we need to make sure we don't lose information so we need r=R
-            if self.r_list != [self.R]:
-                print(f'ERROR: Wrong subjet radius r. For exlusive basis we need r = {self.R}')
-                print()
-                print(f'Changing radius to r = {self.R}')
-                self.r_list = [self.R]
 
         # Initialize model-specific settings
         self.models = config['models']
@@ -99,6 +90,7 @@ class MLAnalysis(common_base.CommonBase):
             model_settings = self.model_settings[model]
             model_info = {'model': model,
                           'model_settings': model_settings,
+                          'classification_task': self.classification_task, 
                           'n_total': self.n_total,
                           'n_train': self.n_train,
                           'n_val': self.n_val,
@@ -125,7 +117,7 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 self.AUC[model_key], self.roc_curve_dict[model_key] = particle_net.ParticleNet(model_info_temp).train()
 
-            if model in ['particle_transformer', 'particle_transformer_laman']:
+            if model in ['particle_transformer', 'particle_transformer_graph']:
                 model_key = f'{model}'
                 print(f'model_key: {model_key}')
                 model_info_temp = model_info.copy()

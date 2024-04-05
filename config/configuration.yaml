@@ -1,28 +1,17 @@
 # Config file for jet classification
 
 #------------------------------------------------------------------
-# Note: We will read processing parameters from the loaded file, 
-# rather than from this config file.
-# See subjets_unshuffled.h5 and subjet_graphs.h5 for the set
-# of parameters that are read from the loaded file.
-#------------------------------------------------------------------
-
-#------------------------------------------------------------------
 # These following parameters are used only in ML analysis
 #------------------------------------------------------------------
 
-# Size of labeled data to load (i.e. number of jets)
-n_train: 20000
-n_val:   5000
-n_test:  5000
+# Which dataset/Jet Classification problem to use
+classification_task: 'ZvsQCD' # Choices: 'qvsg', 'ZvsQCD'. The 'qvsg' dataset: EnergyFlow. The 'ZvsQCD' dataset: JetClass
 
-# Which subjet collections to use
-subjet_basis: 'inclusive'
-r: [0.05]
-
-# Classification labels
-label_0: 'gluon'
-label_1: 'quark'
+# Size of labeled data to load (i.e. number of jets). Recommendet split: 80/10/10
+# The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
+n_train: 1600
+n_val:   200
+n_test:  200
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
 #               particle_transformer, particle_net_laman, particle_transformer, particle_transformer_graph
@@ -40,7 +29,7 @@ particle_transformer:
 
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    batch_size: 256
+    batch_size: 128
     epochs: 15
     learning_rate: 0.001
     input_dim: 1                         # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
