@@ -15,12 +15,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sklearn
 from sklearn import metrics
+import sys
+
+import glob
 
 import torch
 import networkx
 import energyflow
 from analysis.architectures import ParticleNet_Laman 
 
+from dataloader import read_file
 
 class ParticleNet():
     
@@ -57,6 +61,11 @@ class ParticleNet():
         
         self.torch_device = model_info['torch_device']
         self.output_dir = model_info['output_dir']
+
+        self.classification_task = model_info['classification_task']
+        if self.classification_task not in ['ZvsQCD', 'qvsg']: 
+            sys.exit('Invalid classification task. Choose between ZvsQCD and qvsg. For the potential extension to other tasks, please check dataloader.py and modify the code accordingly.')
+        
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
         self.n_test = model_info['n_test']
@@ -79,13 +88,72 @@ class ParticleNet():
 
         # Note: Currently we are only supporting the quark vs gluon dataset from the energyflow package. We can easily modify
         # the code to support our own Z vs qcd dataset as well.
+            
         
-        # Load the four-vectors directly from the quark vs gluon data set
-        self.X_PN, self.Y_PN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                        generator='pythia',  # Herwig is also available
-                                                        with_bc=False        # Turn on to enable heavy quarks
-                                                       )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
-           
+        if self.classification_task == 'ZvsQCD':
+        
+            print(f'Z.vs.QCD dataset')
+            # Each file contains 100k jets for each class
+            nz = nqcd = self.n_total // 2 
+
+            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+            Z_jet_filepattern=  f"{directory_path}/ZToQQ*"
+            QCD_jet_filepattern = f"{directory_path}/ZJetsToNuNu*"
+            # read all files with those patterns in '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+            # Getting the list of files that match the patterns
+            Z_jet_files = glob.glob(Z_jet_filepattern)
+            QCD_jet_files = glob.glob(QCD_jet_filepattern)
+
+            print()
+            print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
+            print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
+            print()
+
+            x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
+            for file in Z_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                x_particles_Z = np.concatenate((x_particles_Z, x_particles), axis = 0) if x_particles_Z.size else x_particles
+                x_jet_Z = np.concatenate((x_jet_Z, x_jet), axis = 0) if x_jet_Z.size else x_jet
+                y_Z = np.concatenate((y_Z, y), axis = 0) if y_Z.size else y
+                if x_particles_Z.shape[0] >= nz: 
+                    x_particles_Z = x_particles_Z[:nz]
+                    x_jet_Z = x_jet_Z[:nz]
+                    y_Z = y_Z[:nz]
+                    break # Stop reading files if we have enough jets
+            
+            x_particles_qcd, x_jet_qcd, y_qcd = np.array([]), np.array([]), np.array([])
+            for file in QCD_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                x_particles_qcd = np.concatenate((x_particles_qcd, x_particles), axis = 0) if x_particles_qcd.size else x_particles
+                x_jet_qcd = np.concatenate((x_jet_qcd, x_jet), axis = 0) if x_jet_qcd.size else x_jet
+                y_qcd = np.concatenate((y_qcd, y), axis = 0) if y_qcd.size else y
+                if x_particles_qcd.shape[0] >= nqcd: 
+                    x_particles_qcd = x_particles_qcd[:nqcd]
+                    x_jet_qcd = x_jet_qcd[:nqcd]
+                    y_qcd = y_qcd[:nqcd]
+                    break
+
+            # concatenate the two datasets 
+            self.X_PN = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
+            self.Y_PN = np.concatenate((y_Z, y_qcd), axis = 0)
+
+            # print how many jets we've loaded 
+            print()
+            print(f"Loaded {self.X_PN.shape[0]} jets for the Z vs QCD classification task.")
+            print()
+
+            self.Y_PN = self.Y_PN[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+            # match the shape of the data to the shape of the energyflow data for consistency
+            self.X_PN = np.transpose(self.X_PN, (0, 2, 1))
+        
+        elif self.classification_task == 'qvsg':
+            print(f'q.vs.g dataset')
+            # Load the four-vectors directly from the quark vs gluon data set
+            self.X_PN, self.Y_PN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
+                                                            generator='pythia',  # Herwig is also available
+                                                            with_bc=False        # Turn on to enable heavy quarks
+                                                        )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+            
 
         # Preprocess by centering jets and normalizing pts
         if self.three_momentum_features:                 # Preprocess the jets to create the three_momentum_features for ParticleNet 
@@ -221,11 +289,11 @@ class ParticleNet():
                 self._train_particlenet(self.train_loader, self.model, optimizer, criterion, scheduler=scheduler)
 
 
-                auc_test, acc_test = self._test_particlenet(self.test_loader, self.model)
-                auc_val, acc_val = self._test_particlenet(self.val_loader, self.model)
+                auc_test, acc_test, roc_test = self._test_particlenet(self.test_loader, self.model)
+                auc_val, acc_val, roc_val = self._test_particlenet(self.val_loader, self.model)
                 
                 if (epoch+1)%5 == 0:
-                    auc_train, acc_train = self._test_particlenet(self.train_loader, self.model)
+                    auc_train, acc_train, roc_train = self._test_particlenet(self.train_loader, self.model)
                     print(f'Epoch: {epoch+1:02d}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
                 else:
                     print(f'Epoch: {epoch+1:02d}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
@@ -258,11 +326,11 @@ class ParticleNet():
                     # Cache management
                     torch.cuda.empty_cache()
 
-                auc_test, acc_test = self._test_particlenet(self.test_loader, self.model)
-                auc_val, acc_val = self._test_particlenet(self.val_loader, self.model)
+                auc_test, acc_test, roc_test = self._test_particlenet(self.test_loader, self.model)
+                auc_val, acc_val, roc_val = self._test_particlenet(self.val_loader, self.model)
 
                 if (epoch+1)%5 == 0:
-                    auc_train, acc_train = self._test_particlenet(self.train_loader, self.model)
+                    auc_train, acc_train, roc_train = self._test_particlenet(self.train_loader, self.model)
                     print(f'Epoch: {epoch+1:02d}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
                 else:
                     print(f'Epoch: {epoch+1:02d}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
@@ -358,6 +426,8 @@ class ParticleNet():
         all_labels = []
         all_output_softmax = []
 
+        # calculate the inference time in ms
+        #time_start = time.time()
         for index, data in enumerate(test_loader):
             inputs, labels = data
             inputs = inputs.to(self.torch_device)
@@ -373,6 +443,9 @@ class ParticleNet():
 
             pred = outputs.argmax(dim=1)  # No need for keepdim=True
             correct += pred.eq(labels).sum().item()
+        
+        #time_end = time.time()
+        #print(f"Time to test model for  = {(time_end - time_start):.6f} seconds")
 
         # Calculate ROC, AUC outside the loop
         all_labels = np.concatenate(all_labels)

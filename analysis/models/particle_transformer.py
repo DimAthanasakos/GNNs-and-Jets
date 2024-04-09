@@ -16,11 +16,18 @@ import math
 import sys
 import glob
 
+import socket 
+
 import matplotlib.pyplot as plt
 import sklearn
 import scipy
 
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+
+
 import networkx
 import energyflow
 from analysis.architectures import ParticleTransformer  
@@ -465,7 +472,6 @@ def rand_graph(x):
 
     return adjacency_matrices
 
-
 class ParT():
     
     #---------------------------------------------------------------
@@ -486,6 +492,8 @@ class ParT():
                                 'n_subjets_total': total number of subjets per jet
                                 'subjet_graphs_dict': dictionary of subjet graphs
         '''
+        print('initializing ParT...')
+
         self.model_info = model_info
     
         self.torch_device = model_info['torch_device']
@@ -510,25 +518,59 @@ class ParT():
         self.pair_input_dim = model_info['model_settings']['pair_input_dim']  # how many interaction terms for pair of particles. 
                                                                               # If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ),
                                                                               # if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
+        
+        # Default values:            
+        self.graph_transformer = False
+        self.graph_type = None
+        self.add_angles = 0
+        self.sorting_key = 'pt'
+        self.k = None
 
         if model_info['model_key'].endswith('graph'): # Graph-Transfomer, e.g. Laman Graph or a KNN Graph
             self.graph_transformer = True
             self.graph_type = self.model_info['model_settings']['graph']
             self.add_angles = model_info['model_settings']['add_angles']
             if self.graph_type == 'knn_graph': self.k = model_info['model_settings']['k']
-            else:  self.k = None
             if self.graph_type == 'laman_knn_graph': self.sorting_key = model_info['model_settings']['sorting_key']
-            else:  self.sorting_key = 'pt'
-                
-        else:                                         # Vanilla Particle Transformer
-            self.graph_transformer = False
-            self.graph_type = None
-            self.add_angles = 0
+
 
 
         #if self.graph_transformer and self.input_dim == 4: 
         #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
-            
+        print('here before set_ddp')
+        set_ddp = True
+        if set_ddp: 
+            #self.rank = 0
+            #self.world_size = 4
+            #print(f"Rank: {self.rank}, World Size: {self.world_size}")
+            #os.environ['MASTER_ADDR'] = 'localhost'
+            #print('here')
+            #with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            #    s.bind(('', 0))  # Bind to an available port provided by the host
+            #    s.listen(1)  # Listen for a connection request
+            #    port = s.getsockname()[1]  # Return the port number assigned
+            #print(port)  # Return the port number assigned
+
+
+            #os.environ['MASTER_PORT'] = str(port)
+            #print('jere')
+            print("MASTER_ADDR:", os.getenv("MASTER_ADDR"))
+            print("MASTER_PORT:", os.getenv("MASTER_PORT"))
+            print("WORLD_SIZE:", os.getenv("WORLD_SIZE"))
+            print("RANK:", os.getenv("RANK"))
+            print("LOCAL_RANK:", os.getenv("LOCAL_RANK"))
+            self.rank = int(os.getenv('RANK', 0))
+            self.local_rank = int(os.getenv('LOCAL_RANK', 0))
+            #self.world_size = int(os.getenv('WORLD_SIZE', 1))
+            self.world_size = 4
+            self.master_port = os.getenv('MASTER_PORT', '8888')
+            torch.cuda.set_device(self.local_rank)
+
+            dist.init_process_group(backend="nccl", init_method="env://")
+
+            print('here')
+            time.sleep(1)
+
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
 
         self.model = self.init_model()
@@ -585,15 +627,18 @@ class ParT():
             # concatenate the two datasets 
             self.X_ParT = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
             self.Y_ParT = np.concatenate((y_Z, y_qcd), axis = 0)
+            self.x_jet = np.concatenate((x_jet_Z, x_jet_qcd), axis = 0)
 
             # print how many jets we've loaded 
             print()
             print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
             print()
-            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
-            # match the shape of the data to the shape of the energyflow data for consistency
-            self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
 
+
+            # match the shape of the data to the shape of the energyflow data for consistency
+            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+            self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
+            
         elif self.classification_task == 'qvsg': 
             # Load the four-vectors directly from the quark vs gluon data set
             self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
@@ -601,6 +646,37 @@ class ParT():
                                                             with_bc=False        # Turn on to enable heavy quarks
                                                         )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
 
+
+        # lets make a quick plot of the pt distribution of the jets (sum(X_PN[:, :, 0]))
+        plt.hist(self.x_jet[:, 0], bins = 100, histtype = 'step', label = 'All jets')
+        plt.hist(self.x_jet[self.Y_ParT == 0, 0], bins = 100, histtype = 'step', label = 'QCD jets')
+        plt.hist(self.x_jet[self.Y_ParT == 1, 0], bins = 100, histtype = 'step', label = 'Z jets')
+        plt.xlabel('Jet pt')
+        plt.ylabel('Number of jets')
+        plt.legend()
+        # save it to the output directory as a pdf file
+        plt.savefig(f"{self.output_dir}/jet_pt_distribution.pdf")
+        plt.close()
+
+        # plot the eta distribution of the jets
+        plt.hist(self.x_jet[:, 1], bins = 100, histtype = 'step', label = 'All jets')
+        plt.hist(self.x_jet[self.Y_ParT == 0, 1], bins = 100, histtype = 'step', label = 'QCD jets')
+        plt.hist(self.x_jet[self.Y_ParT == 1, 1], bins = 100, histtype = 'step', label = 'Z jets')
+        plt.xlabel('Jet eta')
+        plt.ylabel('Number of jets')
+        plt.legend()
+        # save it to the output directory as a pdf file
+        plt.savefig(f"{self.output_dir}/jet_eta_distribution.pdf")
+        plt.close()
+
+        # calculate how many jets are outside the range: pt=[500,550] and |eta| < 1.7
+        pt = self.x_jet[:, 0]
+        eta = self.x_jet[:, 1]
+
+        n_outside = np.sum((pt < 500) | (pt > 550) | (np.abs(eta) > 1.7))
+        print()
+        print(f"Percentage of jets outside the range: pt=[500,550] and |eta| < 1.7: {n_outside/self.n_total*100:.2f}%")
+        print()
         # Preprocess by centering jets and normalizing pts
         for x_ParT in self.X_ParT:
             mask = x_ParT[:,0] > 0
@@ -695,13 +771,13 @@ class ParT():
             # Data loader   
         
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, shuffle = True)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, shuffle = True, num_workers = 4)
 
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, shuffle=True)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, shuffle=True, num_workers = 4)
             
             test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, shuffle=True)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, shuffle=True, num_workers = 4)
 
         # For the case of Vanilla Particle Transformer
         else: 
@@ -765,7 +841,9 @@ class ParT():
 
         for epoch in range(1, epochs+1):
             print("--------------------------------")
+            t_start = time.time()
             loss = self._train_part(self.train_loader, self.model, optimizer, criterion, graph_transformer = self.graph_transformer)
+            print(f'time for training the epoch = {time.time() - t_start:.4f} seconds')
 
             auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, graph_transformer = self.graph_transformer)
             auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, graph_transformer = self.graph_transformer)
@@ -803,14 +881,16 @@ class ParT():
         
     #---------------------------------------------------------------
     def _train_part(self, train_loader, model, optimizer, criterion, graph_transformer = False):
+        if torch.cuda.device_count() > 1:
+            model = DDP(model, device_ids=[self.local_rank])
 
-        model.train() # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
+        model.train()             # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
                                   # that behave differently in training mode vs eval mode (which is the default)
                                   # We need to include this since we have particlenet.eval() in the test_particlenet function
         
         loss_cum = 0              # Cumulative loss
-        
         for index, data in enumerate(train_loader):
+
             inputs, labels = data[0], data[1]
             inputs = inputs.to(self.torch_device)
             labels = labels.to(self.torch_device) 
@@ -829,7 +909,7 @@ class ParT():
 
             # forward + backward + optimize
             outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, graph = graph)
-
+            
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -837,7 +917,7 @@ class ParT():
             loss_cum += loss.item()
             # Cache management
             torch.cuda.empty_cache()
-        
+            
         return loss_cum
 
 
