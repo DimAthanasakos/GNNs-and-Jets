@@ -26,24 +26,27 @@ class SteerAnalysis(common_base.CommonBase):
     #---------------------------------------------------------------
     # Constructor
     #---------------------------------------------------------------
-    def __init__(self, input_file='', config_file='', output_dir='', regenerate_graphs=False, use_precomputed_graphs=False, **kwargs):
+    def __init__(self, input_file='', config_file='', output_dir='', regenerate_graphs=False, use_precomputed_graphs=False, gpu_mode = 'single', **kwargs):
 
         self.config_file = config_file
         self.input_file = input_file
         self.output_dir = output_dir
         self.regenerate_graphs = regenerate_graphs
         self.use_precomputed_graphs = use_precomputed_graphs
+        self.gpu_mode = gpu_mode
+        self.rank = int(os.getenv("LOCAL_RANK", "0"))
 
         self.initialize(config_file)
-
-        print()
-        print(self)
+        if self.rank == 0:
+            print()
+            print(self)
 
     #---------------------------------------------------------------
     # Initialize config
     #---------------------------------------------------------------
     def initialize(self, config_file):
-        print('Initializing class objects')
+        if self.rank == 0:
+            print('Initializing class objects')
 
         with open(config_file, 'r') as stream:
             self.config = yaml.safe_load(stream)
@@ -70,6 +73,7 @@ class SteerAnalysis(common_base.CommonBase):
         # If you want to use subjets instead of hadrons, we also need an input file to read the subjets from.
         # If so, the input file must be one of the files in the google spreadsheet: https://docs.google.com/spreadsheets/d/1DI_GWwZO8sYDB9FS-rFzitoDk3SjfHfgoKVVGzG1j90/edit#gid=0
         
+
         for model in self.models:
             if model in ['subjet_gcn_pytorch', 'subjet_gat_pytorch'] and self.input_file: 
                 # Check whether the graphs file has already been generated, and if not, generate it
@@ -99,19 +103,25 @@ class SteerAnalysis(common_base.CommonBase):
             else: # for particle_net and transformer the graph structure is dynamically generated at each layer which dominates the training time.
                 continue
         # Perform ML analysis, and write results to file
-        print()
-        print('========================================================================')
-        print('Running ML analysis...')
-        analysis = ml_analysis.MLAnalysis(self.config_file, self.output_dir)
+        if self.rank == 0:
+            print()
+            print('========================================================================')
+            print('Running ML analysis...')
+
+        start_time = time.time()
+
+        analysis = ml_analysis.MLAnalysis(self.config_file, self.output_dir, self.gpu_mode)
         analysis.train_models()
-        print()
+        # check if the code is running in parallel, and only plot results for one process (same results for all processes)
 
         # Plot results
-        print('========================================================================')
-        print('Plotting results...')
-        plot = plot_results.PlotResults(self.config_file, self.output_dir)
-        plot.plot_results()
-        print('Done!')
+        if self.rank == 0:
+            print('========================================================================')
+            print('Plotting results...')
+            plot = plot_results.PlotResults(self.config_file, self.output_dir)
+            plot.plot_results()
+            print('Done!')
+            print('--- {} minutes ---'.format((time.time() - start_time)/60.))
 
 ####################################################################################################################
 if __name__ == '__main__':
@@ -134,6 +144,14 @@ if __name__ == '__main__':
     parser.add_argument('--use_precomputed_graphs', 
                         help='use graphs from subjets_unshuffled.h5', 
                         action='store_true', default=False)
+    
+    # Argument for running on a single GPU or multiple GPUs
+    parser.add_argument('-g', '--gpu_mode',
+                    help='Specify "single" for single GPU or "multi" for multiple GPUs',
+                    choices=['single', 'multi'],
+                    default='single',
+                    action='store')
+    
     args = parser.parse_args()
 
     # If invalid config_file or input_file is given, exit
@@ -145,13 +163,14 @@ if __name__ == '__main__':
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    start_time = time.time()
 
     analysis = SteerAnalysis(input_file= '' if not os.path.exists(args.input_file) else args.input_file,
                              config_file=args.config_file, 
                              output_dir=args.output_dir, 
                              regenerate_graphs=args.regenerate_graphs,
-                             use_precomputed_graphs=args.use_precomputed_graphs)
+                             use_precomputed_graphs=args.use_precomputed_graphs,
+                             gpu_mode=args.gpu_mode, 
+                             )
     analysis.run_analysis()
-
-    print('--- {} minutes ---'.format((time.time() - start_time)/60.))
+    
+    

@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 # Load pytorch w/GPU support
-module load pytorch/1.11.0
+module load pytorch/2.1.0-cu12 
 module list
 
 # Install additional packages
@@ -15,8 +15,12 @@ numpy==1.24.4 \
 cython==0.29.30 \
 blosc2==2.0.0 \
 triton \
+energyflow \
+vector \
+awkward \
+uproot \
 
-#module load pytorch/2.1.0-cu12
+module load pytorch/2.1.0-cu12 
 # The following packages are already installed by the pytorch module
 # matplotlib==3.5.1 \
 # networkx==2.7.1 \

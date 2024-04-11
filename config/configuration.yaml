@@ -19,8 +19,8 @@ models: ['particle_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    batch_size: 256
-    epochs: 5
+    batch_size: 64
+    epochs: 2
     learning_rate: 0.001
     input_dim:      4 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
@@ -30,7 +30,7 @@ particle_transformer:
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 2
+    epochs: 4
     learning_rate: 0.001
     input_dim: 1                         # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 

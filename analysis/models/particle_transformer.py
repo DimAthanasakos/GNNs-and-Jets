@@ -492,11 +492,33 @@ class ParT():
                                 'n_subjets_total': total number of subjets per jet
                                 'subjet_graphs_dict': dictionary of subjet graphs
         '''
-        print('initializing ParT...')
+        
+        #print('initializing ParT...')
 
         self.model_info = model_info
-    
-        self.torch_device = model_info['torch_device']
+        self.set_ddp = model_info['gpu_mode'] == 'multi'
+        #print(f"set_ddp: {self.set_ddp}")
+
+        if self.set_ddp: 
+            self.local_rank = int(os.getenv("LOCAL_RANK"))
+            dist.init_process_group(backend="nccl", init_method="env://")
+            torch.cuda.set_device(self.local_rank)
+            self.torch_device = torch.device('cuda', self.local_rank)
+            if self.local_rank == 0:
+                print()
+                print('Running on multiple GPUs...')
+                print()
+                print('setting up DDP...')
+                print("MASTER_ADDR:", os.getenv("MASTER_ADDR"))
+                print("MASTER_PORT:", os.getenv("MASTER_PORT"))
+                print("WORLD_SIZE:", os.getenv("WORLD_SIZE"))
+                print("RANK:", os.getenv("RANK"))
+                print("LOCAL_RANK:", os.getenv("LOCAL_RANK"))
+           
+        else: 
+            self.torch_device = model_info['torch_device']
+            self.local_rank = 0
+
         self.output_dir = model_info['output_dir']
         self.classification_task = model_info['classification_task']
         if self.classification_task not in ['ZvsQCD', 'qvsg']: 
@@ -534,43 +556,6 @@ class ParT():
             if self.graph_type == 'laman_knn_graph': self.sorting_key = model_info['model_settings']['sorting_key']
 
 
-
-        #if self.graph_transformer and self.input_dim == 4: 
-        #    raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 for Laman Graphs')
-        print('here before set_ddp')
-        set_ddp = True
-        if set_ddp: 
-            #self.rank = 0
-            #self.world_size = 4
-            #print(f"Rank: {self.rank}, World Size: {self.world_size}")
-            #os.environ['MASTER_ADDR'] = 'localhost'
-            #print('here')
-            #with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            #    s.bind(('', 0))  # Bind to an available port provided by the host
-            #    s.listen(1)  # Listen for a connection request
-            #    port = s.getsockname()[1]  # Return the port number assigned
-            #print(port)  # Return the port number assigned
-
-
-            #os.environ['MASTER_PORT'] = str(port)
-            #print('jere')
-            print("MASTER_ADDR:", os.getenv("MASTER_ADDR"))
-            print("MASTER_PORT:", os.getenv("MASTER_PORT"))
-            print("WORLD_SIZE:", os.getenv("WORLD_SIZE"))
-            print("RANK:", os.getenv("RANK"))
-            print("LOCAL_RANK:", os.getenv("LOCAL_RANK"))
-            self.rank = int(os.getenv('RANK', 0))
-            self.local_rank = int(os.getenv('LOCAL_RANK', 0))
-            #self.world_size = int(os.getenv('WORLD_SIZE', 1))
-            self.world_size = 4
-            self.master_port = os.getenv('MASTER_PORT', '8888')
-            torch.cuda.set_device(self.local_rank)
-
-            dist.init_process_group(backend="nccl", init_method="env://")
-
-            print('here')
-            time.sleep(1)
-
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
 
         self.model = self.init_model()
@@ -594,11 +579,6 @@ class ParT():
             # Getting the list of files that match the patterns
             Z_jet_files = glob.glob(Z_jet_filepattern)
             QCD_jet_files = glob.glob(QCD_jet_filepattern)
-
-            print()
-            print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
-            print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
-            print()
 
             x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
             for file in Z_jet_files:
@@ -630,10 +610,14 @@ class ParT():
             self.x_jet = np.concatenate((x_jet_Z, x_jet_qcd), axis = 0)
 
             # print how many jets we've loaded 
-            print()
-            print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
-            print()
-
+            if self.local_rank == 0:
+                print()
+                print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
+                print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
+                print()
+                print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
+                print()
+        
 
             # match the shape of the data to the shape of the energyflow data for consistency
             self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
@@ -648,35 +632,35 @@ class ParT():
 
 
         # lets make a quick plot of the pt distribution of the jets (sum(X_PN[:, :, 0]))
-        plt.hist(self.x_jet[:, 0], bins = 100, histtype = 'step', label = 'All jets')
-        plt.hist(self.x_jet[self.Y_ParT == 0, 0], bins = 100, histtype = 'step', label = 'QCD jets')
-        plt.hist(self.x_jet[self.Y_ParT == 1, 0], bins = 100, histtype = 'step', label = 'Z jets')
-        plt.xlabel('Jet pt')
-        plt.ylabel('Number of jets')
-        plt.legend()
+        #plt.hist(self.x_jet[:, 0], bins = 100, histtype = 'step', label = 'All jets')
+        #plt.hist(self.x_jet[self.Y_ParT == 0, 0], bins = 100, histtype = 'step', label = 'QCD jets')
+        #plt.hist(self.x_jet[self.Y_ParT == 1, 0], bins = 100, histtype = 'step', label = 'Z jets')
+        #plt.xlabel('Jet pt')
+        #plt.ylabel('Number of jets')
+        #plt.legend()
         # save it to the output directory as a pdf file
-        plt.savefig(f"{self.output_dir}/jet_pt_distribution.pdf")
-        plt.close()
+        #plt.savefig(f"{self.output_dir}/jet_pt_distribution.pdf")
+        #plt.close()
 
         # plot the eta distribution of the jets
-        plt.hist(self.x_jet[:, 1], bins = 100, histtype = 'step', label = 'All jets')
-        plt.hist(self.x_jet[self.Y_ParT == 0, 1], bins = 100, histtype = 'step', label = 'QCD jets')
-        plt.hist(self.x_jet[self.Y_ParT == 1, 1], bins = 100, histtype = 'step', label = 'Z jets')
-        plt.xlabel('Jet eta')
-        plt.ylabel('Number of jets')
-        plt.legend()
+        #plt.hist(self.x_jet[:, 1], bins = 100, histtype = 'step', label = 'All jets')
+        #plt.hist(self.x_jet[self.Y_ParT == 0, 1], bins = 100, histtype = 'step', label = 'QCD jets')
+        #plt.hist(self.x_jet[self.Y_ParT == 1, 1], bins = 100, histtype = 'step', label = 'Z jets')
+        #plt.xlabel('Jet eta')
+        #plt.ylabel('Number of jets')
+        #plt.legend()
         # save it to the output directory as a pdf file
-        plt.savefig(f"{self.output_dir}/jet_eta_distribution.pdf")
-        plt.close()
+        #plt.savefig(f"{self.output_dir}/jet_eta_distribution.pdf")
+        #plt.close()
 
         # calculate how many jets are outside the range: pt=[500,550] and |eta| < 1.7
-        pt = self.x_jet[:, 0]
-        eta = self.x_jet[:, 1]
+        #pt = self.x_jet[:, 0]
+        #eta = self.x_jet[:, 1]
 
-        n_outside = np.sum((pt < 500) | (pt > 550) | (np.abs(eta) > 1.7))
-        print()
-        print(f"Percentage of jets outside the range: pt=[500,550] and |eta| < 1.7: {n_outside/self.n_total*100:.2f}%")
-        print()
+        #n_outside = np.sum((pt < 500) | (pt > 550) | (np.abs(eta) > 1.7))
+        #print()
+        #print(f"Percentage of jets outside the range: pt=[500,550] and |eta| < 1.7: {n_outside/self.n_total*100:.2f}%")
+        #print()
         # Preprocess by centering jets and normalizing pts
         for x_ParT in self.X_ParT:
             mask = x_ParT[:,0] > 0
@@ -787,13 +771,18 @@ class ParT():
             # Data loader   
             
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, shuffle = True)
+            
+            self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
+
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self. train_sampler, num_workers = 4)
 
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, shuffle=True)
+            #val_sampler = DistributedSampler(val_dataset)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
             
             test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, shuffle=True)
+            #test_sampler = DistributedSampler(test_dataset)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
 
         return train_loader, val_loader, test_loader
 
@@ -809,11 +798,12 @@ class ParT():
         model = model.to(self.torch_device)
         #model = torch.compile(model)
         
-        # Print the model architecture
-        print()
-        print(model)
-        print(f'Total number of parameters: {sum(p.numel() for p in model.parameters())}')
-        print()
+        # Print the model architecture if master process
+        if self.local_rank == 0:
+            print()
+            print(model)
+            print(f'Total number of parameters: {sum(p.numel() for p in model.parameters())}')
+            print()
 
         if self.load_model:
             self.path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
@@ -825,8 +815,9 @@ class ParT():
 
     #---------------------------------------------------------------
     def train(self):
-        print(f'Training...')
-        print()
+        if self.local_rank == 0:
+            print(f'Training...')
+            print()
 
         time_start = time.time()
         # Use custon training parameters
@@ -839,15 +830,18 @@ class ParT():
         best_auc_test = 0
         best_auc_val, best_roc_val = None, None 
 
+        if self.set_ddp:
+            torch.cuda.set_device(self.local_rank)
+            self.model = DDP(self.model, device_ids=[self.local_rank] )
+            
         for epoch in range(1, epochs+1):
-            print("--------------------------------")
+            if self.set_ddp:
+                self.train_sampler.set_epoch(epoch)  
+
             t_start = time.time()
             loss = self._train_part(self.train_loader, self.model, optimizer, criterion, graph_transformer = self.graph_transformer)
-            print(f'time for training the epoch = {time.time() - t_start:.4f} seconds')
-
             auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, graph_transformer = self.graph_transformer)
             auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, graph_transformer = self.graph_transformer)
-            
             # Save the model with the best test AUC
             if auc_test > best_auc_test:
                 best_auc_test = auc_test
@@ -856,33 +850,39 @@ class ParT():
                 # store the model with the best test AUC
                 if self.save_model:
                     best_model_params = self.model.state_dict()
+            # only print out if its the main process
+            
+            if self.local_rank == 0:
+                print("--------------------------------")
+                print(f'time for training the epoch = {time.time() - t_start:.4f} seconds')
+                
 
-            if (epoch)%5 == 0:
-                auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, graph_transformer = self.graph_transformer)
-                print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
-            else:
-                print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                if (epoch)%5 == 0:
+                    auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, graph_transformer = self.graph_transformer)
+                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                else:
+                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
 
         time_end = time.time()
-        print("--------------------------------")
-        print()
-        print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs:.1f} seconds")
-        print()
-        print(f"Best AUC on the test set = {best_auc_test:.4f}")
-        print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
-        print()
-        if self.save_model:
-            path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
-            print(f"Saving model to {path}")
-            torch.save(best_model_params, path) 
-        
+        if self.local_rank == 0:
+            print("--------------------------------")
+            print()
+            print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs:.1f} seconds")
+            print()
+            print(f"Best AUC on the test set = {best_auc_test:.4f}")
+            print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
+            print()
+            if self.save_model:
+                path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+                print(f"Saving model to {path}")
+                torch.save(best_model_params, path) 
+            
         return best_auc_val, best_roc_val
 
         
     #---------------------------------------------------------------
     def _train_part(self, train_loader, model, optimizer, criterion, graph_transformer = False):
-        if torch.cuda.device_count() > 1:
-            model = DDP(model, device_ids=[self.local_rank])
+
 
         model.train()             # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
                                   # that behave differently in training mode vs eval mode (which is the default)

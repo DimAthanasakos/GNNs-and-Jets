@@ -24,11 +24,12 @@ class MLAnalysis(common_base.CommonBase):
     #---------------------------------------------------------------
     # Constructor
     #---------------------------------------------------------------
-    def __init__(self, config_file='', output_dir='', **kwargs):
+    def __init__(self, config_file='', output_dir='', gpu_mode='single', **kwargs):
         super(common_base.CommonBase, self).__init__(**kwargs)
         
         self.config_file = config_file
         self.output_dir = output_dir
+        self.gpu_mode = gpu_mode
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
         
@@ -37,19 +38,20 @@ class MLAnalysis(common_base.CommonBase):
             
         # Set torch device
         os.environ['TORCH'] = torch.__version__
-        print()
-        print(f'pytorch version: {torch.__version__}')
+        self.rank = int(os.getenv("LOCAL_RANK", "0"))
         self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print('Using device:', self.torch_device)
-        if self.torch_device.type == 'cuda':
-            print(torch.cuda.get_device_name(0))
-            print('Memory Usage:')
-            print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')
-            print('Cached:   ', round(torch.cuda.memory_reserved(0)/1024**3,1), 'GB')
-        print()
-
-        print(self)
-        print()
+        if self.rank == 0:
+            print()
+            print(f'pytorch version: {torch.__version__}')
+            print('Using device:', self.torch_device)
+            if self.torch_device.type == 'cuda':
+                print(torch.cuda.get_device_name(0))
+                print('Memory Usage:')
+                print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')
+                print('Cached:   ', round(torch.cuda.memory_reserved(0)/1024**3,1), 'GB')
+            print()
+            print(self)
+            print()
         
     #---------------------------------------------------------------
     # Initialize config file into class members
@@ -70,7 +72,6 @@ class MLAnalysis(common_base.CommonBase):
         self.test_frac = 1. * self.n_test / self.n_total
         self.val_frac  = 1. * self.n_val /  self.n_total
 
-
         # Initialize model-specific settings
         self.models = config['models']
         self.model_settings = {}
@@ -85,8 +86,9 @@ class MLAnalysis(common_base.CommonBase):
         self.AUC = defaultdict(list)
         self.roc_curve_dict = self.recursive_defaultdict()
         for model in self.models:
-            print()
-            print(f'------------- Training model: {model} -------------')
+            if self.rank == 0:
+                print()
+                print(f'------------- Training model: {model} -------------')
             model_settings = self.model_settings[model]
             model_info = {'model': model,
                           'model_settings': model_settings,
@@ -96,7 +98,8 @@ class MLAnalysis(common_base.CommonBase):
                           'n_val': self.n_val,
                           'n_test': self.n_test,
                           'torch_device': self.torch_device,
-                          'output_dir': self.output_dir}
+                          'output_dir': self.output_dir,
+                          'gpu_mode': self.gpu_mode}
 
             # ---------- Input: Particle four-vectors ----------
             if model in ['particle_gcn_pytorch', 'particle_gat_pytorch']:
@@ -119,11 +122,11 @@ class MLAnalysis(common_base.CommonBase):
 
             if model in ['particle_transformer', 'particle_transformer_graph']:
                 model_key = f'{model}'
-                print(f'model_key: {model_key}')
+                if self.rank == 0:
+                    print(f'model_key: {model_key}')
                 model_info_temp = model_info.copy()
                 model_info_temp['model_key'] = model_key
                 self.AUC[model_key], self.roc_curve_dict[model_key] = particle_transformer.ParT(model_info_temp).train()
-
 
             # ---------- Input: Subjet four-vectors ----------
             if model in ['subjet_gcn_pytorch', 'subjet_gat_pytorch']:
