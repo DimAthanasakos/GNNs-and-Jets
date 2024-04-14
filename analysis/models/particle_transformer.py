@@ -568,124 +568,155 @@ class ParT():
         # Currently we are using the Z vs QCD dataset. For more details on the classes of jets look at the dataloader.py script and the 
         # github repository mentioned above.
 
-        if self.classification_task == 'ZvsQCD':
-            # Each file contains 100k jets for each class
-            nz = nqcd = self.n_total // 2 
+        if self.local_rank == 0:
+            if self.classification_task == 'ZvsQCD':
+                # Each file contains 100k jets for each class
+                nz = nqcd = self.n_total // 2 
 
-            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset/'
-            Z_jet_filepattern=  f"{directory_path}/ZToQQ*"
-            QCD_jet_filepattern = f"{directory_path}/ZJetsToNuNu*"
-            # read all files with those patterns in '/pscratch/sd/d/dimathan/JetClass_Dataset/'
-            # Getting the list of files that match the patterns
-            Z_jet_files = glob.glob(Z_jet_filepattern)
-            QCD_jet_files = glob.glob(QCD_jet_filepattern)
+                directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+                Z_jet_filepattern=  f"{directory_path}/ZToQQ*"
+                QCD_jet_filepattern = f"{directory_path}/ZJetsToNuNu*"
+                # read all files with those patterns in '/pscratch/sd/d/dimathan/JetClass_Dataset/'
+                # Getting the list of files that match the patterns
+                Z_jet_files = glob.glob(Z_jet_filepattern)
+                QCD_jet_files = glob.glob(QCD_jet_filepattern)
 
-            x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
-            for file in Z_jet_files:
-                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
-                x_particles_Z = np.concatenate((x_particles_Z, x_particles), axis = 0) if x_particles_Z.size else x_particles
-                x_jet_Z = np.concatenate((x_jet_Z, x_jet), axis = 0) if x_jet_Z.size else x_jet
-                y_Z = np.concatenate((y_Z, y), axis = 0) if y_Z.size else y
-                if x_particles_Z.shape[0] >= nz: 
-                    x_particles_Z = x_particles_Z[:nz]
-                    x_jet_Z = x_jet_Z[:nz]
-                    y_Z = y_Z[:nz]
-                    break # Stop reading files if we have enough jets
+                x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
+                for file in Z_jet_files:
+                    x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                    x_particles_Z = np.concatenate((x_particles_Z, x_particles), axis = 0) if x_particles_Z.size else x_particles
+                    x_jet_Z = np.concatenate((x_jet_Z, x_jet), axis = 0) if x_jet_Z.size else x_jet
+                    y_Z = np.concatenate((y_Z, y), axis = 0) if y_Z.size else y
+                    if x_particles_Z.shape[0] >= nz: 
+                        x_particles_Z = x_particles_Z[:nz]
+                        x_jet_Z = x_jet_Z[:nz]
+                        y_Z = y_Z[:nz]
+                        break # Stop reading files if we have enough jets
+                
+                x_particles_qcd, x_jet_qcd, y_qcd = np.array([]), np.array([]), np.array([])
+                for file in QCD_jet_files:
+                    x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
+                    x_particles_qcd = np.concatenate((x_particles_qcd, x_particles), axis = 0) if x_particles_qcd.size else x_particles
+                    x_jet_qcd = np.concatenate((x_jet_qcd, x_jet), axis = 0) if x_jet_qcd.size else x_jet
+                    y_qcd = np.concatenate((y_qcd, y), axis = 0) if y_qcd.size else y
+                    if x_particles_qcd.shape[0] >= nqcd: 
+                        x_particles_qcd = x_particles_qcd[:nqcd]
+                        x_jet_qcd = x_jet_qcd[:nqcd]
+                        y_qcd = y_qcd[:nqcd]
+                        break
+
+                # concatenate the two datasets 
+                self.X_ParT = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
+                self.Y_ParT = np.concatenate((y_Z, y_qcd), axis = 0)
+                self.x_jet = np.concatenate((x_jet_Z, x_jet_qcd), axis = 0)
+
+                # print how many jets we've loaded 
+                if self.local_rank == 0:
+                    print()
+                    print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
+                    print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
+                    print()
+                    print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
+                    print()
             
-            x_particles_qcd, x_jet_qcd, y_qcd = np.array([]), np.array([]), np.array([])
-            for file in QCD_jet_files:
-                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
-                x_particles_qcd = np.concatenate((x_particles_qcd, x_particles), axis = 0) if x_particles_qcd.size else x_particles
-                x_jet_qcd = np.concatenate((x_jet_qcd, x_jet), axis = 0) if x_jet_qcd.size else x_jet
-                y_qcd = np.concatenate((y_qcd, y), axis = 0) if y_qcd.size else y
-                if x_particles_qcd.shape[0] >= nqcd: 
-                    x_particles_qcd = x_particles_qcd[:nqcd]
-                    x_jet_qcd = x_jet_qcd[:nqcd]
-                    y_qcd = y_qcd[:nqcd]
-                    break
 
-            # concatenate the two datasets 
-            self.X_ParT = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
-            self.Y_ParT = np.concatenate((y_Z, y_qcd), axis = 0)
-            self.x_jet = np.concatenate((x_jet_Z, x_jet_qcd), axis = 0)
+                # match the shape of the data to the shape of the energyflow data for consistency
+                self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+                self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
+                
+            elif self.classification_task == 'qvsg': 
+                # Load the four-vectors directly from the quark vs gluon data set
+                self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
+                                                                generator='pythia',  # Herwig is also available
+                                                                with_bc=False        # Turn on to enable heavy quarks
+                                                            )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
 
-            # print how many jets we've loaded 
-            if self.local_rank == 0:
-                print()
-                print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
-                print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
-                print()
-                print(f"Loaded {self.X_ParT.shape[0]} jets for the Z vs QCD classification task.")
-                print()
-        
+            print(f'X_ParT.shape: {self.X_ParT.shape}')
+            # Preprocess by centering jets and normalizing pts
+            for x_ParT in self.X_ParT:
+                mask = x_ParT[:,0] > 0
+                yphi_avg = np.average(x_ParT[mask,1:3], weights=x_ParT[mask,0], axis=0)
+                x_ParT[mask,1:3] -= yphi_avg
+                x_ParT[mask,0] /= x_ParT[:,0].sum()
 
-            # match the shape of the data to the shape of the energyflow data for consistency
-            self.Y_ParT = self.Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+            # loop through the jets and find the non-zero particles
+            #non_zero_particles = np.linalg.norm(self.X_ParT, axis=2) != 0
+            #valid_n = non_zero_particles.sum(axis = 1)
+            # print the value for valid_n for the Z jets, i.e. self.Y_ParT == 1 
+
+            #print(f'valid_n: {valid_n}')
+            #print()
+            # how many jets have more than 100 particles
+            #print(f'Number of jets with more than 100 particles: {np.sum(valid_n > 100)/len(valid_n)}')
+
+            # Delete the last-column (pid or masses or E) of the particles
+            self.X_ParT = self.X_ParT[:,:,:3]
+            # only keep the first 90 particles from each jet 
+            self.X_ParT = self.X_ParT[:,:85,:]
+            print(f'X_ParT.shape: {self.X_ParT.shape}')
+            # TODO:
+            # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
+            # The input terms for each particle are left as given in the ParticleTransformer architecture.
+                
+            # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
+            self.X_ParT = energyflow.p4s_from_ptyphims(self.X_ParT)
+
+            # (E, px, py, pz) -> (px, py, pz, E)
+            self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
+            
+            # Transpose the data to match the ParticleNet/ParT architecture convention which is (batch_size, n_features, n_particles) 
+            # instead of the current shape (batch_size, n_particles, n_features)
             self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
-            
-        elif self.classification_task == 'qvsg': 
-            # Load the four-vectors directly from the quark vs gluon data set
-            self.X_ParT, self.Y_ParT = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                            generator='pythia',  # Herwig is also available
-                                                            with_bc=False        # Turn on to enable heavy quarks
-                                                        )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
 
+            if self.graph_transformer:
+                features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
+            else:   
+                features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
+                graph_train, graph_val, graph_test = (None,) * 3
 
-        # lets make a quick plot of the pt distribution of the jets (sum(X_PN[:, :, 0]))
-        #plt.hist(self.x_jet[:, 0], bins = 100, histtype = 'step', label = 'All jets')
-        #plt.hist(self.x_jet[self.Y_ParT == 0, 0], bins = 100, histtype = 'step', label = 'QCD jets')
-        #plt.hist(self.x_jet[self.Y_ParT == 1, 0], bins = 100, histtype = 'step', label = 'Z jets')
-        #plt.xlabel('Jet pt')
-        #plt.ylabel('Number of jets')
-        #plt.legend()
-        # save it to the output directory as a pdf file
-        #plt.savefig(f"{self.output_dir}/jet_pt_distribution.pdf")
-        #plt.close()
-
-        # plot the eta distribution of the jets
-        #plt.hist(self.x_jet[:, 1], bins = 100, histtype = 'step', label = 'All jets')
-        #plt.hist(self.x_jet[self.Y_ParT == 0, 1], bins = 100, histtype = 'step', label = 'QCD jets')
-        #plt.hist(self.x_jet[self.Y_ParT == 1, 1], bins = 100, histtype = 'step', label = 'Z jets')
-        #plt.xlabel('Jet eta')
-        #plt.ylabel('Number of jets')
-        #plt.legend()
-        # save it to the output directory as a pdf file
-        #plt.savefig(f"{self.output_dir}/jet_eta_distribution.pdf")
-        #plt.close()
-
-        # calculate how many jets are outside the range: pt=[500,550] and |eta| < 1.7
-        #pt = self.x_jet[:, 0]
-        #eta = self.x_jet[:, 1]
-
-        #n_outside = np.sum((pt < 500) | (pt > 550) | (np.abs(eta) > 1.7))
-        #print()
-        #print(f"Percentage of jets outside the range: pt=[500,550] and |eta| < 1.7: {n_outside/self.n_total*100:.2f}%")
-        #print()
-        # Preprocess by centering jets and normalizing pts
-        for x_ParT in self.X_ParT:
-            mask = x_ParT[:,0] > 0
-            yphi_avg = np.average(x_ParT[mask,1:3], weights=x_ParT[mask,0], axis=0)
-            x_ParT[mask,1:3] -= yphi_avg
-            x_ParT[mask,0] /= x_ParT[:,0].sum()
-
-        # Delete the last-column (pid or masses or E) of the particles
-        self.X_ParT = self.X_ParT[:,:,:3]
-
-        # TODO:
-        # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
-        # The input terms for each particle are left as given in the ParticleTransformer architecture.
-            
-        # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
-        self.X_ParT = energyflow.p4s_from_ptyphims(self.X_ParT)
-
-        # (E, px, py, pz) -> (px, py, pz, E)
-        self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
+            #train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
         
-        # Transpose the data to match the ParticleNet/ParT architecture convention which is (batch_size, n_features, n_particles) 
-        # instead of the current shape (batch_size, n_particles, n_features)
-        self.X_ParT = np.transpose(self.X_ParT, (0, 2, 1))
+        else: # Initialize the data loaders for all but the main process (rank 0)
+            features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test = (None,) * 9
 
-        train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
+        objects = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test]
+        if self.local_rank == 0:
+            for obj in objects:
+                # print dtype and memory usage of the object
+                print(f"Object dtype: {obj.dtype}, memory usage: {obj.nbytes/1024**2} MB")
+        
+        if self.set_ddp:
+            # Broadcast the objects from rank 0 to all other processes
+            dist.broadcast_object_list(objects, src=0)
+            
+        # Now, all GPUs have the same data
+        if self.local_rank != 0:
+            # Unpack the objects on other processes
+            features_train, features_val, features_test, \
+            Y_ParT_train, Y_ParT_val, Y_ParT_test, \
+            graph_train, graph_val, graph_test = objects
+
+        if self.graph_transformer:
+            train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
+            self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+
+            val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
+            
+            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
+
+        else: 
+            train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
+            self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+
+            val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
+            
+            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
 
         return train_loader, val_loader, test_loader
     
@@ -695,8 +726,9 @@ class ParT():
         Split the data into training, validation and test sets depending on the specifics of the model.
         '''
         if graph_transformer:
-            print()
-            print(f"Sorting the particles based on the {sorting_key} key.")
+            if self.local_rank == 0:
+                print()
+                print(f"Sorting the particles based on the {sorting_key} key.")
             # Sort the particles based on the sorting key
             if sorting_key in ['angularity_increasing', 'angularity_decreasing']:
                 px, py, pz, energy = X[:, 0:1, :], X[:, 1:2, :], X[:, 2:3, :], X[:, 3:4, :]
@@ -729,59 +761,87 @@ class ParT():
             chunk_size = 20*1024  # Adjust this based on your memory constraints and the size of self.X_ParT
             total_size = X.shape[0]  # Assuming the first dimension is the batch size
             chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
+            if self.local_rank == 0: # To avoid calculating the graph multiple times
+                if self.graph_type == 'laman_random_graph': 
+                    graph = np.concatenate([random_laman_graph(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] )
+                
+                elif self.graph_type == 'laman_knn_graph': 
+                    print('Constructing a Laman Graph using a mod of the k nearest neighbors algorithm.')
+                    graph = np.concatenate([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)])
 
-            if self.graph_type == 'laman_random_graph': 
-                graph = np.concatenate([random_laman_graph(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] )
+                elif self.graph_type == '2n3_nearest_neighbors': 
+                    graph = np.concatenate([nearest_neighbors(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
+                    
+                elif self.graph_type == 'knn_graph':
+                    k = self.k
+                    graph = np.concatenate([knn(X[i * chunk_size:(i + 1) * chunk_size], k = k, extra_info=True if i==0 else False) for i in range(chunks)] )
+                    
+                else: 
+                    sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
+
+                if self.local_rank == 0:
+                    print(f"Time to create the graph = {time.time() - t_st} seconds")
+            #else: 
+            #    graph = None # we need to initialize graph for all processes
+
+            # Broadcast the graph to all processes        
+            #graph_list = [graph]                          # Encapsulate the graph in a list
+            #dist.broadcast_object_list(graph_list, src=0) # Broadcast the graph to all processes from rank 0
+            #graph = graph_list[0]                         # Update graph with the received data from rank 0
+
             
-            elif self.graph_type == 'laman_knn_graph': 
-                graph = np.concatenate([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)])
-
-            elif self.graph_type == '2n3_nearest_neighbors': 
-                graph = np.concatenate([nearest_neighbors(X[i * chunk_size:(i + 1) * chunk_size]) for i in range(chunks)] ) 
+            #self.graph_transformer = False 
+            if False: 
+                (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
+                                                                                                                               val=self.n_val, test=self.n_test)
+                         
+                # Data loader   
                 
-            elif self.graph_type == 'knn_graph':
-                k = self.k
-                graph = np.concatenate([knn(X[i * chunk_size:(i + 1) * chunk_size], k = k, extra_info=True if i==0 else False) for i in range(chunks)] )
+                train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
+                self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
+                train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+
+                val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
+                val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
                 
-            else: 
-                sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
-
-            print(f"Time to create the graph = {time.time() - t_st} seconds")
-
+                test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
+                test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
+            
+                return train_loader, val_loader, test_loader
+            
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
             graph_train, graph_val, graph_test) = energyflow.utils.data_split(X, Y, graph,
                                                                               val=self.n_val, test=self.n_test, shuffle = True)
 
+            return (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
+            graph_train, graph_val, graph_test)
             # Data loader   
-        
-            train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, shuffle = True, num_workers = 4)
-
-            val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, shuffle=True, num_workers = 4)
             
-            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, shuffle=True, num_workers = 4)
+            #train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
+            #self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
+            #train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+
+            #val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
+            #val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
+            
+            #test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
+            #test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
 
         # For the case of Vanilla Particle Transformer
         else: 
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
                                                                                                                                val=self.n_val, test=self.n_test)
-                         
+            return (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test)
             # Data loader   
             
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
-            
             self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self. train_sampler, num_workers = 4)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
 
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
-            #val_sampler = DistributedSampler(val_dataset)
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
             
             test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
-            #test_sampler = DistributedSampler(test_dataset)
             test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
 
         return train_loader, val_loader, test_loader
