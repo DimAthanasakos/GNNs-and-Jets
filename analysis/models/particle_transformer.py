@@ -21,6 +21,7 @@ import socket
 import matplotlib.pyplot as plt
 import sklearn
 import scipy
+from scipy.sparse import csr_matrix
 
 import torch
 import torch.distributed as dist
@@ -640,19 +641,18 @@ class ParT():
                 x_ParT[mask,0] /= x_ParT[:,0].sum()
 
             # loop through the jets and find the non-zero particles
-            #non_zero_particles = np.linalg.norm(self.X_ParT, axis=2) != 0
-            #valid_n = non_zero_particles.sum(axis = 1)
-            # print the value for valid_n for the Z jets, i.e. self.Y_ParT == 1 
-
-            #print(f'valid_n: {valid_n}')
-            #print()
-            # how many jets have more than 100 particles
-            #print(f'Number of jets with more than 100 particles: {np.sum(valid_n > 100)/len(valid_n)}')
-
+            non_zero_particles = np.linalg.norm(self.X_ParT, axis=2) != 0
+            valid_n = non_zero_particles.sum(axis = 1)
+            # print how many jets with more than 100 particles 
+            #print(f"Percentage of jets with more than 110 particles: {np.sum(valid_n > 110)/valid_n.shape[0]}")
+            #print(f'Percentage of Z jets with more than 110 particles: {np.sum(valid_n[self.Y_ParT == 1] > 110)/valid_n.shape[0]}')
+            #print(f'Percentage of QCD jets with more than 110 particles: {np.sum(valid_n[self.Y_ParT == 0] > 110)/valid_n.shape[0]}')
+            
             # Delete the last-column (pid or masses or E) of the particles
             self.X_ParT = self.X_ParT[:,:,:3]
+            
             # only keep the first 90 particles from each jet 
-            self.X_ParT = self.X_ParT[:,:85,:]
+            self.X_ParT = self.X_ParT[:,:110,:]
             print(f'X_ParT.shape: {self.X_ParT.shape}')
             # TODO:
             # Change the architecture.ParticleTransformer script to accept (pt, eta, phi) as input features for the interaction terms instead of (px, py, pz, E) in order to save compute time
@@ -660,6 +660,7 @@ class ParT():
                 
             # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
             self.X_ParT = energyflow.p4s_from_ptyphims(self.X_ParT)
+            #self.X_ParT = energyflow.p4s_from_ptyphipids(self.X_ParT, error_on_unknown = True)
 
             # (E, px, py, pz) -> (px, py, pz, E)
             self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
@@ -678,23 +679,55 @@ class ParT():
         
         else: # Initialize the data loaders for all but the main process (rank 0)
             features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test = (None,) * 9
-
+        
         objects = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test]
+        
         if self.local_rank == 0:
             for obj in objects:
                 # print dtype and memory usage of the object
-                print(f"Object dtype: {obj.dtype}, memory usage: {obj.nbytes/1024**2} MB")
+                if obj is not None:
+                    print(f"Object dtype: {obj.dtype}, memory usage: {obj.nbytes/1024**2} MB")
+        
+        if graph_train is not None and self.set_ddp:
+            sparse_matrices = [csr_matrix(graph_train[i]) for i in range(graph_train.shape[0])]
+            graph_train = sparse_matrices 
+            sparse_matrices = [csr_matrix(graph_val[i]) for i in range(graph_val.shape[0])]
+            graph_val = sparse_matrices
+            sparse_matrices = [csr_matrix(graph_test[i]) for i in range(graph_test.shape[0])]
+            graph_test = sparse_matrices
+            
+            total_memory_usage = sum(csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes for csr in graph_train)
+
+            # Convert bytes to megabytes for readability
+            total_memory_usage_mb = total_memory_usage / (1024 ** 2)
+            print()
+            print(f"Total memory usage of sparse graph_train: {total_memory_usage_mb:.3f} MB")
+
+
+        objects_tobroadcast = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test]
         
         if self.set_ddp:
             # Broadcast the objects from rank 0 to all other processes
-            dist.broadcast_object_list(objects, src=0)
-            
-        # Now, all GPUs have the same data
+            # The adjacency matrix is very sparse and cannot be broadcasted using the default broadcast_object_list function
+            dist.broadcast_object_list(objects_tobroadcast, src=0)
+
+
+        # Now, all GPUs have the same "objects_tobroadcast". Unpack it.
         if self.local_rank != 0:
             # Unpack the objects on other processes
             features_train, features_val, features_test, \
             Y_ParT_train, Y_ParT_val, Y_ParT_test, \
-            graph_train, graph_val, graph_test = objects
+            graph_train, graph_val, graph_test = objects_tobroadcast
+        
+        # Transform the adjacency matrices back to dense format
+        if graph_train is not None and self.set_ddp:
+            # back to dense format 
+            dense_2d_arrays = [csr.toarray() for csr in graph_train]
+            graph_train = np.array(dense_2d_arrays)
+            dense_2d_arrays = [csr.toarray() for csr in graph_val]
+            graph_val = np.array(dense_2d_arrays)
+            dense_2d_arrays = [csr.toarray() for csr in graph_test]
+            graph_test = np.array(dense_2d_arrays)
 
         if self.graph_transformer:
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
@@ -704,7 +737,7 @@ class ParT():
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
             
-            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
+            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() )
             test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
 
         else: 
@@ -726,9 +759,8 @@ class ParT():
         Split the data into training, validation and test sets depending on the specifics of the model.
         '''
         if graph_transformer:
-            if self.local_rank == 0:
-                print()
-                print(f"Sorting the particles based on the {sorting_key} key.")
+            print()
+            print(f"Sorting the particles based on the {sorting_key} key.")
             # Sort the particles based on the sorting key
             if sorting_key in ['angularity_increasing', 'angularity_decreasing']:
                 px, py, pz, energy = X[:, 0:1, :], X[:, 1:2, :], X[:, 2:3, :], X[:, 3:4, :]
@@ -781,71 +813,19 @@ class ParT():
 
                 if self.local_rank == 0:
                     print(f"Time to create the graph = {time.time() - t_st} seconds")
-            #else: 
-            #    graph = None # we need to initialize graph for all processes
-
-            # Broadcast the graph to all processes        
-            #graph_list = [graph]                          # Encapsulate the graph in a list
-            #dist.broadcast_object_list(graph_list, src=0) # Broadcast the graph to all processes from rank 0
-            #graph = graph_list[0]                         # Update graph with the received data from rank 0
-
-            
-            #self.graph_transformer = False 
-            if False: 
-                (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
-                                                                                                                               val=self.n_val, test=self.n_test)
-                         
-                # Data loader   
-                
-                train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
-                self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-                train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
-
-                val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
-                val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
-                
-                test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
-                test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
-            
-                return train_loader, val_loader, test_loader
-            
+             
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
             graph_train, graph_val, graph_test) = energyflow.utils.data_split(X, Y, graph,
                                                                               val=self.n_val, test=self.n_test, shuffle = True)
 
             return (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
             graph_train, graph_val, graph_test)
-            # Data loader   
-            
-            #train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool() )
-            #self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-            #train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
-
-            #val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
-            #val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
-            
-            #test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long(), torch.from_numpy(graph_test).bool() ) 
-            #test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
-
+       
         # For the case of Vanilla Particle Transformer
         else: 
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
                                                                                                                                val=self.n_val, test=self.n_test)
             return (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test)
-            # Data loader   
-            
-            train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
-            self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
-
-            val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
-            
-            test_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_test).float(), torch.from_numpy(Y_ParT_test).long()) 
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = self.batch_size, num_workers = 4)
-
-        return train_loader, val_loader, test_loader
-
     #---------------------------------------------------------------
     def init_model(self):
         '''
@@ -866,7 +846,7 @@ class ParT():
             print()
 
         if self.load_model:
-            self.path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+            self.path = f'/global/homes/d/dimathan/GNNs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
             print(f"Loading pre-trained model from {self.path}")
             model.load_state_dict(torch.load(self.path, map_location=self.torch_device))
     
@@ -933,7 +913,7 @@ class ParT():
             print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
             print()
             if self.save_model:
-                path = f'/global/homes/d/dimathan/Laman-Graphs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
+                path = f'/global/homes/d/dimathan/GNNs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
                 print(f"Saving model to {path}")
                 torch.save(best_model_params, path) 
             
@@ -957,9 +937,14 @@ class ParT():
             
             if graph_transformer:
                 graph = data[2].to(self.torch_device)
+                #if self.set_ddp: # change from sparse to dense format 
+                #    dense_2d_arrays = [csr.toarray() for csr in graph]
+                #    graph_final = np.array(dense_2d_arrays)
+
             else: 
                 graph = None
-                        
+            
+
             # zero the parameter gradients
             optimizer.zero_grad()
 

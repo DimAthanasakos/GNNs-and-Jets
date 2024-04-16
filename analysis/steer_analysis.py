@@ -120,7 +120,6 @@ class SteerAnalysis(common_base.CommonBase):
             print('Plotting results...')
             plot = plot_results.PlotResults(self.config_file, self.output_dir)
             plot.plot_results()
-            print('Done!')
             print('--- {} minutes ---'.format((time.time() - start_time)/60.))
 
 ####################################################################################################################
@@ -161,7 +160,7 @@ if __name__ == '__main__':
 
     # If output dir does not exist, create it
     if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+        os.makedirs(args.output_dir, exist_ok=True)
 
 
     analysis = SteerAnalysis(input_file= '' if not os.path.exists(args.input_file) else args.input_file,

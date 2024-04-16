@@ -110,22 +110,19 @@ class PlotResults(common_base.CommonBase):
   
             FPR = value[0]
             TPR = value[1]
-            for index, val in enumerate(TPR):
-                if 0.499 < TPR[index] < 0.501: 
-                    print(f"At TPR: {TPR[index]:.4f}, 1/FPR (background rejection) = {1/FPR[index]:.4f}")
-                    print()
-                    break
-            else: 
-                print(f'Not enough datapoints to calculate TPR = 0.5')
-                print()
 
-            for index, val in enumerate(TPR):
-                if 0.799 < TPR[index] < 0.801: 
-                    print(f"At TPR: {TPR[index]:.4f}, 1/FPR (background rejection) = {1/FPR[index]:.4f}")
-                    print()
-                    break
-            else: 
-                print(f"Not enough datapoints to calculate TPR = 0.8")
+            # TPR is the signal efficiency and is ordered. Use bisect to find the index for the TPR we want 
+            index_05 = np.searchsorted(TPR, 0.5)
+            index_06 = np.searchsorted(TPR, 0.6)
+            index_07 = np.searchsorted(TPR, 0.7)
+            index_08 = np.searchsorted(TPR, 0.8)
+            index_09 = np.searchsorted(TPR, 0.9)
+            
+            print(f"At TPR: {TPR[index_05]:.4f}, 1/FPR (background rejection) = {1/FPR[index_05]:.4f}")
+            print(f"At TPR: {TPR[index_06]:.4f}, 1/FPR (background rejection) = {1/FPR[index_06]:.4f}")
+            print(f"At TPR: {TPR[index_07]:.4f}, 1/FPR (background rejection) = {1/FPR[index_07]:.4f}")
+            print(f"At TPR: {TPR[index_08]:.4f}, 1/FPR (background rejection) = {1/FPR[index_08]:.4f}")
+            print(f"At TPR: {TPR[index_09]:.4f}, 1/FPR (background rejection) = {1/FPR[index_09]:.4f}")
 
             plt.plot(FPR, TPR, linewidth=linewidth, label=label,
                      linestyle=linestyle, alpha=alpha, color=color)

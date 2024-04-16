@@ -224,9 +224,7 @@ def get_graph_feature_v1(x, k, idx, Laman = False):
             #fts[:, 2:3, :, :] = torch.sqrt(fts[:, 2:3, :, :])
             
             fts = torch.cat((pt_features, d_features[:, 2:3, :, :], dr_features_sqrt), dim=1)
-            
-            
-            
+
             # print the fts and x tensors of the first jet in the batch            
             #print(f"x.shape = {x.shape}")
             #print(f"d_features.shape = {d_features.shape}")
@@ -358,8 +356,8 @@ class ParticleNet(nn.Module):
     def __init__(self,
                  input_dims,
                  num_classes,
-                 conv_params=[(2, (32, 32, 32)), (7, (64, 64, 64))], # Two EdgeConv layers. The first layer has k=2 because it corresponds to the Laman graph. The second layer has k=7 because it corresponds to the k-nn graph.
-                 fc_params=[(128, 0.1)],                             # One fully connected layer with 128 output channels and a dropout rate of 0.1
+                 conv_params=[(16, (64, 64, 64)), (16, (128, 128, 128)), (16, (128, 128, 128) )], # Two EdgeConv layers. The first layer has k=2 because it corresponds to the Laman graph. The second layer has k=7 because it corresponds to the k-nn graph.
+                 fc_params=[(256, 0.1)],                             # One fully connected layer with 128 output channels and a dropout rate of 0.1
                  Laman = False,
                  use_fusion=True,                                    
                  use_fts_bn=True,
@@ -388,7 +386,7 @@ class ParticleNet(nn.Module):
                                                                               # for the first edge conv block where the input dim is the input dim of the ParticleNet
 
             # Note: For the first layer, if we use the Laman graph, the neighbors (k) has to be k=2. 
-            # Check knn() and get_graph_feature_v1() for more details.                                                             
+            # Check knn() and get_graph_feature_v1() for more details.                   
             self.edge_convs.append(EdgeConvBlock(k = 2 if (idx == 0 and self.Laman) else k, in_feat = in_feat, out_feats = channels, cpu_mode = for_inference, Laman = True if (idx == 0 and self.Laman) else False))
 
         self.use_fusion = use_fusion
