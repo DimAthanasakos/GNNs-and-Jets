@@ -19,27 +19,29 @@ models: ['particle_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    batch_size: 64  
+    batch_size: 256  
     epochs: 25
     learning_rate: 0.0008
-    input_dim:      4 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
+    input_dim:      1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
+
     load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
 
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 20
-    learning_rate: 0.001
-    input_dim: 1                         # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
+    epochs: 1
+    learning_rate: 0.0008
+    input_dim:      1             # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 
-    load_model: False                    # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
-    save_model: False                    # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    graph : 'laman_knn_graph'            # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
-    k : 2                                # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
-    sorting_key: 'pt'                    # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph. 
-                                         # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
+
+    load_model: False             # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
+    save_model: False             # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
+    graph : 'laman_knn_graph'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
+    k : 2                         # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
+    sorting_key: 'pt'             # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph. 
+                                  # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
 
     add_angles: 0       # How many angles to add (+) or remove (-) from the Laman Graph. Currently only works with "random_graph: False" 
                         # The default is 0: When add_angles < 0 and  abs(add_angles)> n_particles^jet - 2, the graph will be disconnected, so in the code
@@ -47,6 +49,12 @@ particle_transformer_graph:
                         # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
                         # Conversely when add_angles > (n_particles^jet choose 2) - (2*n_particles^jet -3), the graph will be fully connected, so we stop there.
     #trim_particles: 110  
+
+nsub_transformer: 
+    graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
+    batch_size: 64  
+    epochs: 5
+    body_dim: 3
 
 particle_net:
     graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used as input. The graph is constructed in the architecture script

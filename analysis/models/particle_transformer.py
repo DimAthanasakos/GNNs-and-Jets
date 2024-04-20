@@ -530,7 +530,11 @@ class ParT():
         self.n_test = model_info['n_test']
         self.n_val = model_info['n_val'] 
         self.batch_size = self.model_info['model_settings']['batch_size']
-        
+        if self.set_ddp: # Adjust batch size for DDP
+            self.batch_size = self.batch_size // torch.cuda.device_count()
+        if self.local_rank == 0:
+            print(f'batch_size: {self.batch_size}')
+
         self.load_model = model_info['model_settings']['load_model'] # Load a pre-trained model or not
         self.save_model = model_info['model_settings']['save_model'] # Save the model or not
       
@@ -869,14 +873,17 @@ class ParT():
 
         best_auc_test = 0
         best_auc_val, best_roc_val = None, None 
-
+        
         if self.set_ddp:
             torch.cuda.set_device(self.local_rank)
             self.model = DDP(self.model, device_ids=[self.local_rank] )
-            
+            if self.local_rank == 0:
+                print()
+                print('We change the batch size to 1/#GPUS of the original (config file) in order to retain the original batch size for the DDP model.')
+                print()
+        
         for epoch in range(1, epochs+1):
-            if self.set_ddp:
-                self.train_sampler.set_epoch(epoch)  
+            if self.set_ddp: self.train_sampler.set_epoch(epoch)  
 
             t_start = time.time()
             loss = self._train_part(self.train_loader, self.model, optimizer, criterion, graph_transformer = self.graph_transformer)
@@ -888,10 +895,9 @@ class ParT():
                 best_auc_val = auc_val
                 best_roc_val = roc_val
                 # store the model with the best test AUC
-                if self.save_model:
-                    best_model_params = self.model.state_dict()
-            # only print out if its the main process
+                if self.save_model: best_model_params = self.model.state_dict()
             
+            # only print if its the main process
             if self.local_rank == 0:
                 print("--------------------------------")
                 print(f'time for training the epoch = {time.time() - t_start:.4f} seconds')
@@ -937,10 +943,6 @@ class ParT():
             
             if graph_transformer:
                 graph = data[2].to(self.torch_device)
-                #if self.set_ddp: # change from sparse to dense format 
-                #    dense_2d_arrays = [csr.toarray() for csr in graph]
-                #    graph_final = np.array(dense_2d_arrays)
-
             else: 
                 graph = None
             
