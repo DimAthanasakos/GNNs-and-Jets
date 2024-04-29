@@ -620,11 +620,12 @@ class ParticleTransformer(nn.Module):
             
             # filter the attn_mask with the graph that was constructed in models.ParticleTransformer. Otherwise, full transformer is used.
             if graph is not None:
+                t_s = time.time()
                 bool_mask =  graph.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, 
                                                                                         num_particles, num_particles).to(attn_mask.device)
                    
                 attn_mask = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
-
+                #print(f"Time for filtering attn_mask: {time.time() - t_s}")
             # transform
             for block in self.blocks:
                 x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask = attn_mask)
