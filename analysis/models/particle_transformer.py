@@ -1,8 +1,6 @@
-''' ParticleNet
+''' Particle Transformer
 
-Paper: "ParticleNet: Jet Tagging via Particle Clouds" - https://arxiv.org/abs/1902.08570
-
-Adapted from the DGCNN implementation in https://github.com/WangYueFt/dgcnn/blob/master/pytorch/model.py.
+Paper: "Particle Transformer for Jet Tagging" - https://arxiv.org/abs/1902.08570
 
 Here we use 3 different versions of ParticleNet, the original one (7dim features for each particle and nearest neighbors algorithm at each layer), 
 a 3dim modified one (3dim features for each particle and nearest neighbors algorithm at each layer, to make comparisons with Laman Graphs easier) 

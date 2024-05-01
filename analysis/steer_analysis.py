@@ -9,8 +9,6 @@ import sys
 import yaml
 import time
 
-import torch
-
 import data_IO
 import graph_constructor
 import ml_analysis

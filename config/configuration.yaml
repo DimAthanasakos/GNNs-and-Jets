@@ -5,22 +5,22 @@
 #------------------------------------------------------------------
 
 # Which dataset/Jet Classification problem to use
-classification_task: 'ZvsQCD' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
+classification_task: 'qvsg' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
 
 # Size of labeled data to load (i.e. number of jets). Recommended split: 80/10/10
 # The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
-n_train: 3000
-n_val:   500
-n_test:  500
+n_train: 10
+n_val:   5
+n_test:  5
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
 #               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph
-models: ['particle_transformer_graph']
+models: ['nsub_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256  
-    epochs: 2
+    epochs: 1
     learning_rate: 0.0008
     input_dim:      1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
@@ -54,6 +54,7 @@ nsub_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 64  
     epochs: 5
+    learning_rate: 0.0008
     body_dim: 3
 
 particle_net:
