@@ -22,6 +22,7 @@ import seaborn as sns
 import uproot
 import h5py
 
+
 # Fastjet via python (from external library heppy)
 import fastjet as fj
 import fjcontrib
@@ -39,14 +40,14 @@ from sklearn.model_selection import train_test_split
 import networkx
 import energyflow
 
-from analysis.architectures.dnn import DNN 
+from analysis.architectures.NsubTransformer import ParticleTransformer
 
 import random
 
 from dataloader import read_file
 
 
-class nsubDNN():
+class nsubTrans():
     
     #---------------------------------------------------------------
     def __init__(self, model_info, k):
@@ -84,6 +85,9 @@ class nsubDNN():
         self.learning_rate = self.model_info['model_settings']['learning_rate']
         self.epochs = self.model_info['model_settings']['epochs']
         self.K = k
+        if self.K > 20:
+            print(f"K = {self.K} is too large. Fastjet can't calculate nsubs for K > 20 ")
+            sys.exit()
 
         self.output = defaultdict(list)
         self.N_list = []
@@ -94,6 +98,15 @@ class nsubDNN():
             self.beta_list += [0.5,1,2]
 
         #self.X_nsub, self.Y  = self.init_data()
+
+        if False: 
+            with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'w') as f:
+                # Create datasets in the file
+                f.create_dataset('X_nsub', data=self.X_nsub)
+                f.create_dataset('Y', data=self.Y)
+            print('written to file')
+            print()
+
         if True: 
             with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
                 self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-2)]
@@ -103,6 +116,11 @@ class nsubDNN():
 
         print(f'X_nsub.shape: {self.X_nsub.shape}')
         print(f'Y.shape: {self.Y.shape}')
+        print()
+        # change the shape of X_nsub from (num_jets, n_features) to (num_jets, 1, n_features)
+        self.X_nsub = self.X_nsub.reshape(-1, 1, self.X_nsub.shape[1])
+        print(f'X_nsub.shape: {self.X_nsub.shape}')
+
 
         self.model = self.init_model()
 
@@ -170,7 +188,7 @@ class nsubDNN():
         '''
 
         # Define the model 
-        model = DNN(input_size=self.X_nsub.shape[1], hidden_size=hidden_size, dropout = dropout)
+        model = ParticleTransformer(input_dim = 2, num_classes = 2)
 
         model = model.to(self.torch_device)
 
@@ -217,7 +235,7 @@ class nsubDNN():
     #---------------------------------------------------------------
     def train(self):
         print()
-        print(f'Training nsub DNN...') 
+        print(f'Training nsub transformer...') 
 
         # shuffle X_nsub and self.Y and split into training/test/validation sets
         X_train, Y_train, X_val, Y_val, X_test, Y_test = self.shuffle_and_split(self.X_nsub, self.Y, test_ratio=self.test_frac, val_ratio=self.val_frac)     
@@ -239,10 +257,19 @@ class nsubDNN():
             for X_batch, Y_batch in train_loader:
                 # move the data to the device            
                 X_batch, Y_batch = X_batch.to(self.torch_device), Y_batch.to(self.torch_device)
+                
+                # add positional encoding to x by adding a new feature to each particle, thats i/N where i is the index of the particle and N is the number of particles
+                if True:
+                    N = X_batch.size(2)
+                    X_batch = torch.cat([X_batch, torch.arange(1, N+1).view(1, 1, -1).expand(X_batch.size(0), 1, -1).type_as(X_batch) / N], dim=1)
+
+                Y_batch = Y_batch.squeeze()
 
                 optimizer.zero_grad()
                 output = self.model(X_batch)
-                loss = criterion(output, Y_batch)
+                target_one_hot = torch.nn.functional.one_hot(Y_batch.to(torch.int64), num_classes=2).to(torch.float32)
+
+                loss = criterion(output, target_one_hot)
                 loss.backward()
                 optimizer.step()
 
@@ -250,20 +277,30 @@ class nsubDNN():
             self.model.eval()
             with torch.no_grad():
                 # Move data to the device for evaluation
-                X_train_tensor = torch.tensor(X_train).float().to(self.torch_device)
+                X_train_tensor = torch.tensor(X_train).float().to(self.torch_device)[:10000]
                 X_val_tensor = torch.tensor(X_val).float().to(self.torch_device)
                 X_test_tensor = torch.tensor(X_test).float().to(self.torch_device)
+                
+                if True:
+                    N = X_train_tensor.size(2)
+                    X_train_tensor = torch.cat([X_train_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_train_tensor.size(0), 1, -1).type_as(X_train_tensor) / N], dim=1)
+                    X_val_tensor = torch.cat([X_val_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_val_tensor.size(0), 1, -1).type_as(X_val_tensor) / N], dim=1)
+                    X_test_tensor = torch.cat([X_test_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_test_tensor.size(0), 1, -1).type_as(X_test_tensor) / N], dim=1)
                 
                 # Compute outputs
                 output_train = self.model(X_train_tensor)
                 output_val = self.model(X_val_tensor)
                 output_test = self.model(X_test_tensor)
-                
-                # Compute AUC (move tensors to CPU for sklearn compatibility)
-                auc_train = roc_auc_score(Y_train, output_train.cpu().numpy())
-                auc_val = roc_auc_score(Y_val, output_val.cpu().numpy())
-                roc_val = roc_curve(Y_val, output_val.cpu().numpy())
-                auc_test = roc_auc_score(Y_test, output_test.cpu().numpy())
+
+                output_positive_class_train = output_train[:, 1]
+                output_positive_class_val = output_val[:, 1]
+                output_positive_class_test = output_test[:, 1]
+
+                #Compute AUC (move tensors to CPU for sklearn compatibility)
+                auc_train = roc_auc_score(Y_train[:10000], output_positive_class_train.cpu().numpy())
+                auc_val = roc_auc_score(Y_val, output_positive_class_val.cpu().numpy())
+                roc_val = roc_curve(Y_val, output_positive_class_val.cpu().numpy())
+                auc_test = roc_auc_score(Y_test, output_positive_class_test.cpu().numpy())
 
                 if auc_test > best_auc_test:
                     best_auc_test = auc_test
@@ -273,7 +310,7 @@ class nsubDNN():
 
             # with 4 decimal places
             print(f'--------------------------------------------------------------------')
-            print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC train = {auc_train:.4f}, AUC val = {auc_val:.4f}, AUC test = {auc_test:.4f}")
+            print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC_train = {auc_train:.4f}, AUC val = {auc_val:.4f}, AUC test = {auc_test:.4f}")
         
         time_end = time.time()
         print(f'--------------------------------------------------------------------')

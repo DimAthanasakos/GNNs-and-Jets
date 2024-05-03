@@ -1122,23 +1122,9 @@ class ParT():
             
             if graph_transformer:
                 graph = data[2].to(self.torch_device)
-                #graph = laman_knn(inputs, angles = self.add_angles)
-                #print(f'graph.device: {graph.device}')
             else: 
                 graph = None
             
-            #graph = laman_knn(inputs, angles = self.add_angles)
-            # is graph numpy or torch tensor?
-            #if isinstance(graph, np.ndarray):
-            #    print(f'graph is numpy array')
-            #elif isinstance(graph, torch.Tensor):
-            #    print(f'graph is torch tensor')
-            #print(f'graph.device: {graph.device}')
-            #graph = graph.to(self.torch_device)
-            #print(f'graph.device: {graph.device}')
-            #print('graph_t.shape:', graph_t.shape)
-            #print('graph.shape:', graph.shape)
-            #print('graph_t:', graph_t)
 
             # zero the parameter gradients
             optimizer.zero_grad()
@@ -1176,8 +1162,6 @@ class ParT():
             
             if graph_transformer:
                 graph = data[2].to(self.torch_device)
-                #graph = laman_knn(inputs, angles = self.add_angles)
-                #print(f'graph.device: {graph.device}')
             else: 
                 graph = None
 

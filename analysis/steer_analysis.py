@@ -39,6 +39,7 @@ class SteerAnalysis(common_base.CommonBase):
             print()
             print(self)
 
+
     #---------------------------------------------------------------
     # Initialize config
     #---------------------------------------------------------------
@@ -49,7 +50,7 @@ class SteerAnalysis(common_base.CommonBase):
         with open(config_file, 'r') as stream:
             self.config = yaml.safe_load(stream)
         self.models = self.config['models']
-        #self.graph_types = config['graph_types']
+
 
     #---------------------------------------------------------------
     # Main function

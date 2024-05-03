@@ -9,13 +9,13 @@ classification_task: 'qvsg' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' da
 
 # Size of labeled data to load (i.e. number of jets). Recommended split: 80/10/10
 # The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
-n_train: 10
-n_val:   5
-n_test:  5
+n_train: 400000
+n_val:   50000
+n_test:  50000
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
-#               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph
-models: ['nsub_transformer']
+#               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph, nsub_transformer, nsub_dnn
+models: ['nsub_dnn', 'nsub_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
@@ -50,12 +50,19 @@ particle_transformer_graph:
                         # Conversely when add_angles > (n_particles^jet choose 2) - (2*n_particles^jet -3), the graph will be fully connected, so we stop there.
     #trim_particles: 110  
 
+nsub_dnn: 
+    graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
+    batch_size: 512
+    epochs: 70
+    learning_rate: 0.0002
+    K: [3, 5, 7, 10, 15, 20]
+
 nsub_transformer: 
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    batch_size: 64  
-    epochs: 5
-    learning_rate: 0.0008
-    body_dim: 3
+    batch_size: 512
+    epochs: 70
+    learning_rate: 0.0002
+    K: [3, 5, 7, 10, 15, 20]
 
 particle_net:
     graph_types: ['disconnected'] # placeholder name for the graph type since no actual graph is used as input. The graph is constructed in the architecture script
