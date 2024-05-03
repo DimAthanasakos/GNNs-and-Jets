@@ -15,7 +15,7 @@ import torch
 sys.path.append('.')
 from base import common_base
 import data_IO
-from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_transformer
+from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn
 
 
 ################################################################
@@ -116,15 +116,24 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 self.AUC[model_key], self.roc_curve_dict[model_key] = particle_transformer.ParT(model_info_temp).train()
 
+            if model in ['nsub_dnn']:
+                model_key = f'{model}'
+                if self.rank == 0:
+                    print(f'model_key: {model_key}')
+                model_info_temp = model_info.copy()
+                model_info_temp['model_key'] = model_key
+                self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_dnn.nsubDNN(model_info_temp).train()
+                print('DONE NICE')
+                
             if model in ['nsub_transformer']:
                 model_key = f'{model}'
                 if self.rank == 0:
                     print(f'model_key: {model_key}')
                 model_info_temp = model_info.copy()
                 model_info_temp['model_key'] = model_key
-                nsub_transformer.nsubTrans(model_info_temp).train()
-                print('DONE NICE')
-                
+                self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_trans.nsubTrans(model_info_temp).train()
+
+
 
             # TODO: PFN (tensorflow)
 
