@@ -1,3 +1,7 @@
+'''
+DNN based on the nsubjettiness features. This script is loading the already calculated nsubs from the file nsubs.h5 and training a DNN on them.
+
+'''
 import os
 import time
 import numpy as np
@@ -22,10 +26,6 @@ import seaborn as sns
 import uproot
 import h5py
 
-# Fastjet via python (from external library heppy)
-import fastjet as fj
-import fjcontrib
-import fjext
 
 import torch
 import torch.nn as nn
@@ -93,13 +93,12 @@ class nsubDNN():
             self.N_list += [i+1] * 3
             self.beta_list += [0.5,1,2]
 
-        #self.X_nsub, self.Y  = self.init_data()
-        if True: 
-            with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
-                self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-2)]
-                self.Y = np.array(f['Y'])[:self.n_total]
-            print('loaded from file')
-            print()
+        
+        with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
+            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-2)]
+            self.Y = np.array(f['Y'])[:self.n_total]
+        print('loaded from file')
+        print()
 
         print(f'X_nsub.shape: {self.X_nsub.shape}')
         print(f'Y.shape: {self.Y.shape}')
@@ -107,61 +106,6 @@ class nsubDNN():
         self.model = self.init_model()
 
 
-    #---------------------------------------------------------------
-    def init_data(self):
-        '''
-        Initialize data loaders
-        '''
-        print('initializing data loaders...')
-        
-        #if self.classification_task == 'qvsg':
-        # Load the four-vectors directly from the quark vs gluon data set
-        X_ParT, Y = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                                generator='pythia',  # Herwig is also available
-                                                                with_bc=False        # Turn on to enable heavy quarks
-                                                            )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
-        
-        #elif self.classification_task == 'ZvsQCD':
-        #    # TODO: Load the four-vectors from the Z vs QCD data set
-        #    pass 
-
-        print(f'X_ParT.shape: {X_ParT.shape}')
-
-        columns = ['pt', 'y', 'phi', 'pid']
-        df_particles = pd.DataFrame(X_ParT.reshape(-1, 4), columns=columns)
-        df_particles.index = np.repeat(np.arange(X_ParT.shape[0]), X_ParT.shape[1]) + 1
-        df_particles.index.name = 'jet_id'
-                
-        # (i) Group the particle dataframe by jet id
-        #     df_particles_grouped is a DataFrameGroupBy object with one particle dataframe per jet
-        df_fjparticles_grouped = df_particles.groupby('jet_id')
-
-
-        # (ii) Transform the DataFrameGroupBy object to a SeriesGroupBy of fastjet::PseudoJets
-        # NOTE: for now we neglect the mass -- and assume y=eta
-        # TO DO: Add y to https://github.com/matplo/heppy/blob/master/cpptools/src/fjext/fjtools.cxx
-        # TO DO: Add mass vector using pdg
-        print('Converting particle dataframe to fastjet::PseudoJets...')
-        self.df_fjparticles = df_fjparticles_grouped.apply(self.get_fjparticles)
-        print('Done.')
-        print()
-
-        
-        # Fill each of the jet_variables into a list
-        fj.ClusterSequence.print_banner()
-        print('Finding jets and computing N-subjettiness and subjets...')
-        result = [self.analyze_event(fj_particles) for fj_particles in self.df_fjparticles]
-
-        # make self.output into a numpy array 
-        self.output_np = {key: np.array(value) for key, value in self.output.items()}
-
-        print(self.output_np.keys())
-
-        # create a self.X_nsub that is a numpy array of shape (n_jets, n_features) where the n_features are the Nsubjettiness features
-        X_nsub = np.column_stack([self.output_np[key] for key in self.output_np.keys()])
-        
-        return X_nsub, Y
-        
 
     #---------------------------------------------------------------
     def init_model(self, hidden_size = 256, dropout = 0.05):
@@ -286,65 +230,4 @@ class nsubDNN():
 
         return best_auc_val, best_roc_val
 
-
-    #---------------------------------------------------------------
-    # Transform particles to fastjet::PseudoJets
-    #---------------------------------------------------------------
-    def get_fjparticles(self, df_particles_grouped):
-
-        user_index_offset = 0
-        return fjext.vectorize_pt_eta_phi(df_particles_grouped['pt'].values,
-                                          df_particles_grouped['y'].values,
-                                          df_particles_grouped['phi'].values,
-                                          user_index_offset)
-
-
-    #---------------------------------------------------------------
-    # Process an event
-    #---------------------------------------------------------------
-    def analyze_event(self, fj_particles):
-    
-        # Check that the entries exist appropriately
-        if fj_particles and type(fj_particles) != fj.vectorPJ:
-            print('fj_particles type mismatch -- skipping event')
-            return
-
-        # Find jets -- one jet per "event".  We only use antikt for the Jet Clustering
-        jet_def = fj.JetDefinition(fj.antikt_algorithm, fj.JetDefinition.max_allowable_R)
-
-        cs = fj.ClusterSequence(fj_particles, jet_def)
-        jet_selected = fj.sorted_by_pt(cs.inclusive_jets())[0]
-        #print(f'jet_selected: {jet_selected}')
-        #print()
-        
-        # Compute jet quantities and store in our data structures
-        self.analyze_jets(jet_selected)
-        
-        #for key in self.output.keys():
-        #    print(f'{key}: {self.output[key]}')
-        #    print(f'{key}.shape: {np.array(self.output[key]).shape}')
-        #    print()
-
-    #---------------------------------------------------------------
-    # Analyze jets of a given event.
-    #---------------------------------------------------------------
-    def analyze_jets(self, jet_selected):
-        self.fill_nsubjettiness(jet_selected)
-
-
-    #---------------------------------------------------------------
-    # Compute Nsubjettiness of jet
-    #---------------------------------------------------------------
-    def fill_nsubjettiness(self, jet):
-    
-        axis_definition = fjcontrib.OnePass_KT_Axes()
-
-        for i,N in enumerate(self.N_list):
-            
-            beta = self.beta_list[i]
-            measure_definition = fjcontrib.UnnormalizedMeasure(beta)
-            n_subjettiness_calculator = fjcontrib.Nsubjettiness(N, axis_definition, measure_definition)
-            n_subjettiness = n_subjettiness_calculator.result(jet)/jet.pt()
-            
-            self.output[f'N{N}_beta{beta}'].append(n_subjettiness)
 
