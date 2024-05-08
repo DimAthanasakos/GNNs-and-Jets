@@ -605,11 +605,8 @@ class ParT():
                                 'subjet_graphs_dict': dictionary of subjet graphs
         '''
         
-        #print('initializing ParT...')
-
         self.model_info = model_info
         self.set_ddp = model_info['gpu_mode'] == 'multi'
-        #print(f"set_ddp: {self.set_ddp}")
 
         if self.set_ddp: 
             self.local_rank = int(os.getenv("LOCAL_RANK"))
@@ -718,7 +715,6 @@ class ParT():
                 
             # Change the order of the features from (pt, eta, phi, pid) to (px, py, pz, E) to agree with the architecture.ParticleTransformer script
             self.X_ParT = energyflow.p4s_from_ptyphims(self.X_ParT)
-            #self.X_ParT = energyflow.p4s_from_ptyphipids(self.X_ParT, error_on_unknown = True)
 
             # (E, px, py, pz) -> (px, py, pz, E)
             self.X_ParT[:,:, [0, 1, 2, 3]] = self.X_ParT[:,:, [1, 2, 3, 0]] 
@@ -733,7 +729,6 @@ class ParT():
                 features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
                 graph_train, graph_val, graph_test = (None,) * 3
 
-            #train_loader, val_loader, test_loader = self.load_data(self.X_ParT, self.Y_ParT, graph_transformer = self.graph_transformer, sorting_key = self.sorting_key)
         
         else: # Initialize the data loaders for all but the main process (rank 0)
             features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test = (None,) * 9
@@ -771,48 +766,24 @@ class ParT():
 
         #objects_tobroadcast = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test]
         objects_tobroadcast = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test]
-        objects_tobroadcast_1 = [graph_train, graph_val, graph_test]
+        objects_tobroadcast_graph = [graph_train, graph_val, graph_test]
 
         if self.set_ddp:
             # Broadcast the objects from rank 0 to all other processes
             # The adjacency matrix is very sparse and cannot be broadcasted using the default broadcast_object_list function
             dist.broadcast_object_list(objects_tobroadcast, src=0)
-            dist.broadcast_object_list(objects_tobroadcast_1, src=0)
-            #batch_size = 1000  # Define a suitable batch size
-
-            # Broadcast each object in batches
-            #for obj in objects_tobroadcast:
-            #    batches = split_into_batches(obj, batch_size)
-            #    broadcast_batches(batches, src=0)
-
+            dist.broadcast_object_list(objects_tobroadcast_graph, src=0)
 
 
         # Now, all GPUs have the same "objects_tobroadcast". Unpack it.
         if self.local_rank != 0:
-            #print(f'self.local rank = {self.local_rank}')
             # Unpack the objects on other processes
             features_train, features_val, features_test, \
             Y_ParT_train, Y_ParT_val, Y_ParT_test, = objects_tobroadcast
-            #graph_train, graph_val, graph_test = objects_tobroadcast
-            graph_train, graph_val, graph_test = objects_tobroadcast_1
 
-            if False:
-                chunk_size = 20*256  # Adjust this based on your memory constraints and the size of self.X_ParT
-                for index, X in enumerate([features_train, features_val, features_test]):
-                    total_size = X.shape[0]  # Assuming the first dimension is the batch size
-                    chunks = (total_size - 1) // chunk_size + 1  # Calculate how many chunks are needed
-                    #print('Constructing a Laman Graph using a mod of the k nearest neighbors algorithm.')
-                    if index == 0:
-                        graph_train = torch.cat([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles ) for i in range(chunks)])
-                        graph_train = graph_train.numpy()
-                    if index == 1:
-                        graph_val = torch.cat([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles ) for i in range(chunks)])
-                        graph_val = graph_val.numpy()
-                    if index == 2:
-                        graph_test = torch.cat([laman_knn(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles ) for i in range(chunks)])
-                        graph_test = graph_test.numpy()
+            graph_train, graph_val, graph_test = objects_tobroadcast_graph
 
-        
+     
         # Transform the adjacency matrices back to dense format
         if  graph_train is not None and self.set_ddp:
             # back to dense format 
@@ -823,11 +794,6 @@ class ParT():
             dense_2d_arrays = [csr.toarray() for csr in graph_test]
             graph_test = np.array(dense_2d_arrays)
 
-        #print(f'self.local rank = {self.local_rank}')
-        #if isinstance(graph_train, np.ndarray):
-        #    print(f"graph_train : numpy array")
-        #else:
-        #    print(f"graph_train : torch tensor")
 
         if self.graph_transformer:
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool()  )

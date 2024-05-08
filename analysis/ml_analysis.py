@@ -124,7 +124,8 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 k_list = model_info_temp['model_settings']['K']
                 for k in k_list:
-                    self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_dnn.nsubDNN(model_info_temp, k).train()
+                    model_info_temp['model_settings']['K'] = k
+                    self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_dnn.nsubDNN(model_info_temp).train()
                 
                 
             if model in ['nsub_transformer']:
@@ -135,6 +136,7 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 k_list = model_info_temp['model_settings']['K']
                 for k in k_list:
+                    model_info_temp['model_settings']['K'] = k
                     self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_trans.nsubTrans(model_info_temp, k).train()
 
 
