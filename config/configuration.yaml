@@ -9,29 +9,32 @@ classification_task: 'qvsg' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' da
 
 # Size of labeled data to load (i.e. number of jets). Recommended split: 80/10/10
 # The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
-n_train: 400000
-n_val:   50000
-n_test:  50000
+n_train: 800
+n_val:   100
+n_test:  100
+
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
-#               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph, nsub_transformer, nsub_dnn
-models: ['nsub_dnn', 'nsub_transformer']
+#               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph, nsub_transformer, nsub_dnn, subjet_transformer
+models: ['subjet_transformer']
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256  
-    epochs: 1
+    epochs: 2
     learning_rate: 0.0008
     input_dim:      1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
 
     load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
+    trim_particles: [110]
+
 
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 1
+    epochs: 2
     learning_rate: 0.0008
     input_dim:      1             # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 
@@ -48,19 +51,34 @@ particle_transformer_graph:
                         # we set remove_angles = min(remove_angles, n_particles^jet - 2) to avoid this issue. 
                         # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
                         # Conversely when add_angles > (n_particles^jet choose 2) - (2*n_particles^jet -3), the graph will be fully connected, so we stop there.
-    #trim_particles: 110  
+    trim_particles: [110] 
+
+subjet_transformer:
+    graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
+    cluster_list: [5, 10]
+    batch_size: 256  
+    epochs: 2
+    learning_rate: 0.0008
+    input_dim:      1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
+    pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
+
+    load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
+    save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
+    trim_particles: [110]
+
 
 nsub_dnn: 
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 512
-    epochs: 70
+    epochs: 30
     learning_rate: 0.0002
-    K: [3, 5, 7, 10, 15, 20]
+    K: [20]
+    trim_particles: [2, 4, 5, 10]
 
 nsub_transformer: 
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 512
-    epochs: 70
+    epochs: 75
     learning_rate: 0.0002
     K: [3, 5, 7, 10, 15, 20]
 
