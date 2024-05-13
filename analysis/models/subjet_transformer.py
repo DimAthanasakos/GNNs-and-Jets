@@ -606,7 +606,6 @@ class ParT():
                                 'n_subjets_total': total number of subjets per jet
                                 'subjet_graphs_dict': dictionary of subjet graphs
         '''
-        print(f'SUBJET TRANS')
 
         self.model_info = model_info
         self.set_ddp = model_info['gpu_mode'] == 'multi'
@@ -698,7 +697,7 @@ class ParT():
 
         if self.local_rank == 0:
             
-            with h5py.File('/pscratch/sd/d/dimathan/GNN/test_store/subjets_unshuffled.h5', 'r') as hf:
+            with h5py.File('/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5', 'r') as hf:
                 self.Y_ParT = hf[f'y'][:]
                 self.X_ParT = hf[f'subjet_N{self.N_cluster}_sub_X'][:,:,:]
 

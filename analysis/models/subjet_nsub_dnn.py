@@ -67,8 +67,10 @@ class nsubDNN():
         self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'torch_device: {self.torch_device}')
 
-        self.output_dir = model_info['output_dir']
+        self.N_cluster = self.model_info['model_settings']['N_cluster']
 
+        self.output_dir = model_info['output_dir']
+        
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
         self.n_test = model_info['n_test']
@@ -90,9 +92,10 @@ class nsubDNN():
             self.beta_list += [0.5,1,2]
 
         
-        with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
-            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-2)]
-            self.Y = np.array(f['Y'])[:self.n_total]
+        with h5py.File('/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5', 'r') as hf:
+            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-2)]
+            self.Y = hf[f'y'][:]
+            
         print('loaded from file')
         print()
 
@@ -219,6 +222,7 @@ class nsubDNN():
         print(f'--------------------------------------------------------------------')
         print()
         print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
+        print(f'N_cluster = {self.N_cluster}')
         print(f'K: {self.K}')
         print(f"Best AUC on the test set = {best_auc_test:.4f}")
         print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")

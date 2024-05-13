@@ -48,11 +48,13 @@ class Process(common_base.CommonBase):
         self.start_time = time.time()
 
         self.output_dir = output_dir  # Path to store the output. Be careful with overwriting.
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
         self.n_total = n_total
 
         self.n_total = n_total 
         self.K = K 
-        self.N_cluster_list = [5, 10, 20]
+        self.N_cluster_list = N_cluster_list
 
         # Create two-layer nested defaultdict of lists to store jet observables
         self.output = defaultdict(lambda: defaultdict(list))
@@ -62,9 +64,14 @@ class Process(common_base.CommonBase):
         self.N_list = []
         self.beta_list = []
 
-        for i in range(K):
+        # construct the nsub basis 
+        for i in range(K-2):
             self.N_list += [i+1] * 3
             self.beta_list += [0.5,1,2]
+
+        self.N_list += [K-1, K-1] 
+        self.beta_list += [1, 2]
+    
 
         self.init_data()
 
@@ -309,6 +316,7 @@ class Process(common_base.CommonBase):
 
 if __name__ == '__main__':
     # Path to store the nsubs file. Be careful with overwriting.
-    dir = '/pscratch/sd/d/dimathan/GNN/test_store'
-    Process(dir)
+    
+    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k'
+    Process(dir, n_total = 200000, N_cluster_list = [2, 3, 5, 7, 10, 15], K = 15)
     print('done')
