@@ -61,11 +61,11 @@ class nsubDNN():
                                 'body_dim':     n-body phase space dimension
         '''
         
-        #print('initializing ParT...')
-
         self.model_info = model_info
         self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'torch_device: {self.torch_device}')
+
+        self.classification_task = model_info['classification_task']
 
         self.N_cluster = self.model_info['model_settings']['N_cluster']
 
@@ -84,17 +84,25 @@ class nsubDNN():
         self.K = self.model_info['model_settings']['K']
 
         self.output = defaultdict(list)
-        self.N_list = []
-        self.beta_list = []
 
-        for i in range(self.K-2):
-            self.N_list += [i+1] * 3
-            self.beta_list += [0.5,1,2]
+        # Load the nsubjettiness features
+        if self.classification_task == 'qvsg': 
+            if self.N_cluster in [2, 3, 5, 7, 10, 15]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5'
+            elif self.N_cluster in [4, 6, 8]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N468/subjets_unshuffled.h5'
+            else: 
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N203040506080100/subjets_unshuffled.h5'
+        elif self.classification_task == 'ZvsQCD':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10, 15]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N23456781015/subjets_unshuffled.h5'
+            else:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100/subjets_unshuffled.h5'
 
         
-        with h5py.File('/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5', 'r') as hf:
-            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-2)]
-            self.Y = hf[f'y'][:]
+        with h5py.File(path, 'r') as hf:
+            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-1)]
+            self.Y = hf[f'y'][:self.n_total]
             
         print('loaded from file')
         print()

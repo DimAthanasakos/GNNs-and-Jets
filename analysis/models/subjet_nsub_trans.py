@@ -61,15 +61,14 @@ class nsubTrans():
                                 'body_dim':     n-body phase space dimension
         '''
         
-        #print('initializing ParT...')
-
         self.model_info = model_info
         self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'torch_device: {self.torch_device}')
-
+        
         self.output_dir = model_info['output_dir']
-        self.classification_task = model_info['classification_task']
+        self.N_cluster = self.model_info['model_settings']['N_cluster']
 
+        self.classification_task = model_info['classification_task']
         if self.classification_task not in ['ZvsQCD', 'qvsg']: 
             sys.exit('Invalid classification task. Choose between ZvsQCD and qvsg. For the potential extension to other tasks from JetClass, please check dataloader.py and modify the code accordingly.')
         
@@ -91,9 +90,25 @@ class nsubTrans():
 
         self.output = defaultdict(list)
 
-        with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
-            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-1)]
-            self.Y = np.array(f['Y'])[:self.n_total]
+        # Load the nsubjettiness features
+        if self.classification_task == 'qvsg': 
+            if self.N_cluster in [2, 3, 5, 7, 10, 15]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5'
+            elif self.N_cluster in [4, 6, 8]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N468/subjets_unshuffled.h5'
+            else: 
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N203040506080100/subjets_unshuffled.h5'
+        elif self.classification_task == 'ZvsQCD':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10, 15]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N23456781015/subjets_unshuffled.h5'
+            else:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100/subjets_unshuffled.h5'
+
+        
+        with h5py.File(path, 'r') as hf:
+            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-1)]
+            self.Y = hf[f'y'][:self.n_total]
+
         print('loaded from file')
         print()
 
@@ -185,12 +200,6 @@ class nsubTrans():
             for X_batch, Y_batch in train_loader:
                 # move the data to the device            
                 X_batch, Y_batch = X_batch.to(self.torch_device), Y_batch.to(self.torch_device)
-                
-                # add positional encoding to x by adding a new feature to each particle, thats i/N where i is the index of the particle and N is the number of particles
-                if False:
-                    N = X_batch.size(2)
-                    X_batch = torch.cat([X_batch, torch.arange(1, N+1).view(1, 1, -1).expand(X_batch.size(0), 1, -1).type_as(X_batch) / N], dim=1)
-
                 Y_batch = Y_batch.squeeze()
 
                 optimizer.zero_grad()
@@ -208,12 +217,6 @@ class nsubTrans():
                 X_train_tensor = torch.tensor(X_train).float().to(self.torch_device)[:10000]
                 X_val_tensor = torch.tensor(X_val).float().to(self.torch_device)
                 X_test_tensor = torch.tensor(X_test).float().to(self.torch_device)
-                
-                if False:
-                    N = X_train_tensor.size(2)
-                    X_train_tensor = torch.cat([X_train_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_train_tensor.size(0), 1, -1).type_as(X_train_tensor) / N], dim=1)
-                    X_val_tensor = torch.cat([X_val_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_val_tensor.size(0), 1, -1).type_as(X_val_tensor) / N], dim=1)
-                    X_test_tensor = torch.cat([X_test_tensor, torch.arange(1, N+1).view(1, 1, -1).expand(X_test_tensor.size(0), 1, -1).type_as(X_test_tensor) / N], dim=1)
                 
                 # Compute outputs
                 output_train = self.model(X_train_tensor)

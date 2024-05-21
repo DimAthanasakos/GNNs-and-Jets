@@ -630,13 +630,16 @@ class ParticleTransformer(nn.Module):
             for block in self.blocks:
                 x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask = attn_mask)
 
+            #print(f'x.shape: {x.shape}')
             # extract class token
             cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
+            #print(f'cls_tokens.shape: {cls_tokens.shape}')
             for block in self.cls_blocks:
                 cls_tokens = block(x, x_cls=cls_tokens, padding_mask=padding_mask)
-
+                #print(f'cls_tokens.shape: {cls_tokens.shape}')
             x_cls = self.norm(cls_tokens).squeeze(0)
-
+            #print(f'x_cls.shape: {x_cls.shape}')
+            #print()
             # fc
             if self.fc is None:
                 return x_cls

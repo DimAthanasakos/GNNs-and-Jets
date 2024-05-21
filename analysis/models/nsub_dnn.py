@@ -10,7 +10,6 @@ import sys
 import glob
 from collections import defaultdict
 
-
 import functools
 
 import socket 
@@ -61,7 +60,6 @@ class nsubDNN():
                                 'body_dim':     n-body phase space dimension
         '''
         
-        #print('initializing ParT...')
 
         self.model_info = model_info
         self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -227,3 +225,22 @@ class nsubDNN():
         return best_auc_val, best_roc_val
 
 
+
+
+#---------------------------------------------------------------
+if __name__ == '__main__':
+    model_info = {
+        'output_dir': '/pscratch/sd/d/dimathan/OT/test_output',
+        'n_total': 2000,
+        'n_train': 1600, 
+        'n_test': 200,
+        'n_val': 200,
+        'model_settings': {
+            'epochs':10,
+            'learning_rate':0.0003,
+            'batch_size':512,
+            'K': 10
+        }
+    }
+    classifier = nsubDNN(model_info)
+    classifier.train()

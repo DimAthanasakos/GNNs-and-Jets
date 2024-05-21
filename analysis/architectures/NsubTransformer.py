@@ -280,8 +280,6 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
     
 
-    
-
 class ParticleTransformer(nn.Module):
 
     def __init__(self,
@@ -316,7 +314,7 @@ class ParticleTransformer(nn.Module):
                            add_bias_kv=False, activation=activation,
                            scale_fc=True, scale_attn=True, scale_heads=True, scale_resids=True)
         
-        self.pos_encoder = PositionalEncoding(embed_dim, dropout=0.0, max_len=50)
+        self.pos_encoder = PositionalEncoding(embed_dim, dropout=0.0, max_len=100)
 
         cfg_block = copy.deepcopy(default_cfg)
         if block_params is not None:
@@ -374,7 +372,7 @@ class ParticleTransformer(nn.Module):
             # input embedding 
             x = self.embed(x).masked_fill(~mask.permute(2, 0, 1), 0)  # (P, N, C)  # masked_fill: fill the elements of x with 0 where mask is False
                                                                       # mask.permute(2, 0, 1) -> (P, N, 1)
-            #x = self.pos_encoder(x)
+            x = self.pos_encoder(x)
 
             # transform
             for block in self.blocks:

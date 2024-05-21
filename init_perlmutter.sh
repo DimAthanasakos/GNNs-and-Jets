@@ -23,19 +23,21 @@ uproot
 echo "Before second module load"
 module load pytorch/2.1.0-cu12
 module list
-echo "After second module load"
 
 
-cd  
-module use heppy/modules
-module load heppy 
+export PYTHONPATH=$PYTHONPATH:/global/u2/d/dimathan/GNNs-and-Jets/analysis
 
-echo "Modules loaded"
 
-export PYTHONPATH="/global/common/software/nersc/pm-stable/sw/pytorch/2.1.0/lib/python3.10:$PYTHONPATH"
-cd GNNs-and-Jets
-alias python='python3.10'
-echo "Alias set"
+#cd  
+#module use heppy/modules
+#module load heppy 
+
+#echo "Modules loaded"
+
+#export PYTHONPATH="/global/common/software/nersc/pm-stable/sw/pytorch/2.1.0/lib/python3.10:$PYTHONPATH"
+#cd GNNs-and-Jets
+#alias python='python3.10'
+#echo "Alias set"
 
 # The following packages are already installed by the pytorch module
 # matplotlib==3.5.1 \

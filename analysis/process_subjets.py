@@ -15,6 +15,7 @@ import functools
 import socket 
 import matplotlib.pyplot as plt
 
+from dataloader import read_file
 
 # Fastjet via python (from external library heppy)
 import fastjet as fj
@@ -42,7 +43,7 @@ from base import common_base
 ################################################################
 class Process(common_base.CommonBase):
 
-    def __init__(self, output_dir='', n_total = 1000, N_cluster_list = [20], K = 4, **kwargs):
+    def __init__(self, output_dir='', n_total = 1000, N_cluster_list = [20], K = 4, classification_task = 'qvsg', **kwargs):
         super(common_base.CommonBase, self).__init__(**kwargs)
 
         self.start_time = time.time()
@@ -55,6 +56,7 @@ class Process(common_base.CommonBase):
         self.n_total = n_total 
         self.K = K 
         self.N_cluster_list = N_cluster_list
+        self.classification_task = classification_task
 
         # Create two-layer nested defaultdict of lists to store jet observables
         self.output = defaultdict(lambda: defaultdict(list))
@@ -165,16 +167,77 @@ class Process(common_base.CommonBase):
         Load the pp and AA data
         '''
         
-        #if self.classification_task == 'qvsg':
+        if self.classification_task == 'qvsg':
         # Load the four-vectors directly from the quark vs gluon data set
-        X, self.y = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
+            X, self.y = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
                                                                 generator='pythia',  # Herwig is also available
                                                                 with_bc=False        # Turn on to enable heavy quarks
                                                             )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
         
-        #elif self.classification_task == 'ZvsQCD':
-        #    # TODO: Load the four-vectors from the Z vs QCD data set
-        #    pass 
+        elif self.classification_task == 'ZvsQCD':
+            # Each file contains 100k jets for each class
+            n_signal = n_bckg = self.n_total // 2 
+            #/pscratch/sd/d/dimathan/JetClass_Dataset/t_jets/bqq
+            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset'
+            if self.classification_task == 'ZvsQCD':   
+                signal_jet_filepattern=  f"{directory_path}/Z_jets/ZToQQ*"
+                label_signal = 'label_Zqq'
+            elif self.classification_task == 'TvsQCD': 
+                signal_jet_filepattern=  f"{directory_path}/t_jets/bqq/TTBar*"
+                label_signal = 'label_Tbqq'
+
+            bckg_jet_filepattern = f"{directory_path}/qg_jets/ZJetsToNuNu*"
+
+            # Getting the list of files that match the patterns
+            signal_jet_files = glob.glob(signal_jet_filepattern)
+            bckg_jet_files = glob.glob(bckg_jet_filepattern)
+            
+            x_particles_signal, x_jet_signal, y_signal = np.array([]), np.array([]), np.array([]) 
+            for file in signal_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = [label_signal, 'label_QCD'])
+                x_particles_signal = np.concatenate((x_particles_signal, x_particles), axis = 0) if x_particles_signal.size else x_particles
+                x_jet_signal = np.concatenate((x_jet_signal, x_jet), axis = 0) if x_jet_signal.size else x_jet
+                y_signal = np.concatenate((y_signal, y), axis = 0) if y_signal.size else y
+                if x_particles_signal.shape[0] >= n_signal: 
+                    x_particles_signal = x_particles_signal[:n_signal]
+                    x_jet_signal = x_jet_signal[:n_signal]
+                    y_signal = y_signal[:n_signal]
+                    break # Stop reading files if we have enough jets
+                
+            x_particles_bckg, x_jet_bckg, y_bckg = np.array([]), np.array([]), np.array([])
+            for file in bckg_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = [label_signal, 'label_QCD'])
+                x_particles_bckg = np.concatenate((x_particles_bckg, x_particles), axis = 0) if x_particles_bckg.size else x_particles
+                x_jet_bckg = np.concatenate((x_jet_bckg, x_jet), axis = 0) if x_jet_bckg.size else x_jet
+                y_bckg = np.concatenate((y_bckg, y), axis = 0) if y_bckg.size else y
+                if x_particles_bckg.shape[0] >= n_bckg: 
+                    x_particles_bckg = x_particles_bckg[:n_bckg]
+                    x_jet_bckg = x_jet_bckg[:n_bckg]
+                    y_bckg = y_bckg[:n_bckg]
+                    break
+            
+            # concatenate the two datasets 
+            X_ParT = np.concatenate((x_particles_signal, x_particles_bckg), axis = 0)
+            Y_ParT = np.concatenate((y_signal, y_bckg), axis = 0)
+            x_jet = np.concatenate((x_jet_signal, x_jet_bckg), axis = 0)
+
+            print()
+            print(f"Found {len(signal_jet_files)} files matching {self.classification_task} pattern.")
+            print(f"Found {len(bckg_jet_files)} files matching ZJetsToNuNu pattern.")
+            print()
+            print(f"Loaded {X_ParT.shape[0]} jets for the {self.classification_task} classification task.")
+            print()
+            
+
+            # match the shape of the data to the shape of the energyflow data for consistency
+            self.y = Y_ParT[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+            X = np.transpose(X_ParT, (0, 2, 1))
+
+            # shuffle the data 
+            indices = np.random.permutation(self.n_total)
+            self.y = self.y[indices]
+            X = X[indices]
+
 
         print(f'X_ParT.shape: {X.shape}')
         X = X[:, :, :3]
@@ -317,6 +380,6 @@ class Process(common_base.CommonBase):
 if __name__ == '__main__':
     # Path to store the nsubs file. Be careful with overwriting.
     
-    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k'
-    Process(dir, n_total = 200000, N_cluster_list = [2, 3, 5, 7, 10, 15], K = 15)
+    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100'
+    Process(dir, n_total = 200000, N_cluster_list = [20, 30, 40, 50, 60, 80, 100], K = 21, classification_task = 'ZvsQCD')
     print('done')

@@ -241,7 +241,7 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
     average_true = torch.mean(sum_true_per_batch.float())  # Convert to float for mean calculation
 
     # Print info on the graphs. Very intensive computationally, so we keep it as an option 
-    if True: 
+    if False: 
         tot_2n3 = 0
         tot_n = 0 
         total_n1=0
@@ -583,6 +583,29 @@ def broadcast_batches(batches, src):
         dist.broadcast(batch, src=src)
 
 
+def to_pt2(x, eps=1e-8):
+    pt2 = x[:, :2].square().sum(dim=1, keepdim=True)
+    if eps is not None:
+        pt2 = pt2.clamp(min=eps)
+    return pt2
+
+def atan2(y, x):
+    sx = torch.sign(x)
+    sy = torch.sign(y)
+    pi_part = (sy + sx * (sy ** 2 - 1)) * (sx - 1) * (-math.pi / 2)
+    atan_part = torch.arctan(y / (x + (1 - sx ** 2))) * sx ** 2
+    return atan_part + pi_part
+
+# Transform the 4-momentum vector to the (pt, rapidity, phi, mass) representation
+def to_ptrapphim(x, eps=1e-8): 
+    # x: (N, 4, ...), dim1 : (px, py, pz, E)
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+    pt = torch.sqrt(to_pt2(x, eps=eps))
+    # rapidity = 0.5 * torch.log((energy + pz) / (energy - pz))
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    return torch.cat((pt, rapidity, phi), dim=1)
 
 class ParT():
     
@@ -648,9 +671,6 @@ class ParT():
         self.load_model = model_info['model_settings']['load_model'] # Load a pre-trained model or not
         self.save_model = model_info['model_settings']['save_model'] # Save the model or not
       
-        self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
-        if self.input_dim not in [1, 4]:
-            raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 or 4') 
         
         self.pair_input_dim = model_info['model_settings']['pair_input_dim']  # how many interaction terms for pair of particles. 
                                                                               # If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ),
@@ -669,10 +689,16 @@ class ParT():
 
         if model_info['model_key'].endswith('graph'): # Graph-Transfomer, e.g. Laman Graph or a KNN Graph
             self.graph_transformer = True
+            self.input_dim = 1
             self.graph_type = self.model_info['model_settings']['graph']
             self.add_angles = model_info['model_settings']['add_angles']
             if self.graph_type == 'knn_graph': self.k = model_info['model_settings']['k']
             if self.graph_type == 'laman_knn_graph': self.sorting_key = model_info['model_settings']['sorting_key']
+
+        else: 
+            self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
+            if self.input_dim not in [1, 3, 4]:
+                raise ValueError('Invalid input_dim at the config file for ParT. Must be 1, 3 or 4') 
 
 
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
@@ -704,7 +730,7 @@ class ParT():
             self.X_ParT = self.X_ParT[:,:,:3]
             
             # only keep the first 110 particles from each jet 
-            self.X_ParT = self.X_ParT[:,:110,:]
+            self.X_ParT = self.X_ParT[:,:self.model_info['model_settings']['trim_particles'],:]
             print(f'X_ParT.shape: {self.X_ParT.shape}')
             non_zero_particles = np.linalg.norm(self.X_ParT, axis=2) != 0
             valid_n = non_zero_particles.sum(axis = 1)
@@ -764,7 +790,6 @@ class ParT():
             print(f"Total memory usage of sparse graphs: {total_memory_usage_mb:.3f} MB")
 
 
-        #objects_tobroadcast = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, graph_train, graph_val, graph_test]
         objects_tobroadcast = [features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test]
         objects_tobroadcast_graph = [graph_train, graph_val, graph_test]
 
@@ -906,6 +931,7 @@ class ParT():
         return X_ParT, Y_ParT
 
 
+    #---------------------------------------------------------------
     def load_data(self, X, Y, graph_transformer = False, sorting_key = None):
         ''' 
         Split the data into training, validation and test sets depending on the specifics of the model.
@@ -963,8 +989,7 @@ class ParT():
                 else: 
                     sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
 
-                if self.local_rank == 0:
-                    print(f"Time to create the graph = {time.time() - t_st} seconds")
+                print(f"Time to create the graph = {time.time() - t_st} seconds")
              
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test, 
             graph_train, graph_val, graph_test) = energyflow.utils.data_split(X, Y, graph.numpy(),
@@ -1059,7 +1084,7 @@ class ParT():
             print("--------------------------------")
             print()
             print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
-            print()
+            print(f'trim_particles: {self.model_info["model_settings"]["trim_particles"]}')
             print(f"Best AUC on the test set = {best_auc_test:.4f}")
             print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
             print()
@@ -1095,12 +1120,20 @@ class ParT():
             # zero the parameter gradients
             optimizer.zero_grad()
 
-            # create pt of each particle instead of (px, py, pz, E) for the input 
-            pt = torch.sqrt(inputs[:, 0, :]**2 + inputs[:, 1, :]**2)
-            pt = pt.unsqueeze(1).clamp(min=10**-8)
+            if self.input_dim == 1:
+                # create pt of each particle instead of (px, py, pz, E) for the input 
+                pt, _, _ = to_ptrapphim(inputs).split((1, 1, 1), dim=1)
+                x = pt
+
+            elif self.input_dim == 3: 
+                p3 = to_ptrapphim(inputs)
+                x = p3 
+
+            else:
+                x = inputs
 
             # forward + backward + optimize
-            outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, graph = graph)
+            outputs = model(x = x, v = inputs, graph = graph)
             
             loss = criterion(outputs, labels)
             loss.backward()
@@ -1131,12 +1164,21 @@ class ParT():
             else: 
                 graph = None
 
-            # create pt of each particle instead of (px, py, pz, E) for the input 
-            pt = torch.sqrt(inputs[:, 0, :]**2 + inputs[:, 1, :]**2)
-            pt = pt.unsqueeze(1).clamp(min=10**-8)
+            if self.input_dim == 1:
+                # create pt of each particle instead of (px, py, pz, E) for the input 
+                pt, _, _ = to_ptrapphim(inputs).split((1, 1, 1), dim=1)
+                x = pt
 
-            outputs = model(x = pt if self.input_dim==1 else inputs, v = inputs, graph = graph)
+            elif self.input_dim == 3: 
+                p3 = to_ptrapphim(inputs)
+                x = p3 
+                
+            else:
+                x = inputs
 
+            # forward + backward + optimize
+            outputs = model(x = x, v = inputs, graph = graph)
+            
             output_softmax = torch.nn.functional.softmax(outputs, dim=1) # Keep on GPU
             all_output_softmax.append(output_softmax[:, 1].detach().cpu().numpy())
             all_labels.append(labels.detach().cpu().numpy())

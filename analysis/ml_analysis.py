@@ -15,7 +15,7 @@ import torch
 sys.path.append('.')
 from base import common_base
 import data_IO
-from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn, subjet_transformer, subjet_nsub_dnn
+from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn, subjet_transformer, subjet_nsub_dnn, subjet_nsub_trans
 
 
 ################################################################
@@ -133,6 +133,10 @@ class MLAnalysis(common_base.CommonBase):
                     for trim_particles in trim_particles_list:
                         model_info_temp['model_settings']['trim_particles'] = trim_particles
                         self.AUC[model_key], self.roc_curve_dict[model_key] = subjet_transformer.ParT(model_info_temp).train()
+                print('===============================================')
+                print('AUC list: ', auc_list)
+                print('===============================================')
+
 
 
             if model in ['nsub_dnn']:
@@ -142,7 +146,6 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp = model_info.copy()
                 model_info_temp['model_key'] = model_key
                 k_list = model_info_temp['model_settings']['K']
-                trim_particles_list = model_info_temp['model_settings']['trim_particles']
                 for k in k_list:
                     model_info_temp['model_settings']['K'] = k
                     self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_dnn.nsubDNN(model_info_temp).train()
@@ -161,6 +164,10 @@ class MLAnalysis(common_base.CommonBase):
                     for k in k_list:
                         model_info_temp['model_settings']['K'] = k
                         self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_dnn.nsubDNN(model_info_temp).train()
+                print('===============================================')
+                print('AUC list: ', auc_list)
+                print('===============================================')
+
                     
                 
             if model in ['nsub_transformer']:
@@ -172,9 +179,25 @@ class MLAnalysis(common_base.CommonBase):
                 k_list = model_info_temp['model_settings']['K']
                 for k in k_list:
                     model_info_temp['model_settings']['K'] = k
-                    self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_trans.nsubTrans(model_info_temp, k).train()
+                    self.AUC[model_key], self.roc_curve_dict[model_key]  = nsub_trans.nsubTrans(model_info_temp).train()
 
-
+            if model in ['subjet_nsub_transformer']:
+                model_key = f'{model}'
+                if self.rank == 0: print(f'model_key: {model_key}')
+                model_info_temp = model_info.copy()
+                model_info_temp['model_key'] = model_key
+                k_list = model_info_temp['model_settings']['K']
+                cluster_list = model_info_temp['model_settings']['cluster_list']
+                auc_list = []
+                for N_cluster in cluster_list:
+                    model_info_temp['model_settings']['N_cluster'] = N_cluster
+                    for k in k_list:
+                        model_info_temp['model_settings']['K'] = k
+                        self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_trans.nsubTrans(model_info_temp).train()
+                        auc_list.append(self.AUC[model_key]) 
+                print('===============================================')
+                print('AUC list: ', auc_list)
+                print('===============================================')
 
             # TODO: PFN (tensorflow)
 
