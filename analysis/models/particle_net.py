@@ -63,8 +63,6 @@ class ParticleNet():
         self.output_dir = model_info['output_dir']
 
         self.classification_task = model_info['classification_task']
-        if self.classification_task not in ['ZvsQCD', 'qvsg']: 
-            sys.exit('Invalid classification task. Choose between ZvsQCD and qvsg. For the potential extension to other tasks, please check dataloader.py and modify the code accordingly.')
         
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
@@ -72,11 +70,11 @@ class ParticleNet():
         self.n_val = model_info['n_val']
         
 
-        self.train_loader, self.val_loader, self.test_loader = self.init_data()
+        self.train_loader, self.val_loader, self.test_loader = self.init_data(classification_task=self.classification_task, n_total=self.n_total)
         self.model = self.init_model()
 
     #---------------------------------------------------------------
-    def init_data(self):
+    def init_data(self, classification_task, n_total):
         print()
         if self.Laman: print(f"Training particle_net w/ Laman graphs ...")
         else: print(f"Training with original particle_net ...")
@@ -85,78 +83,77 @@ class ParticleNet():
             print(f"WARNING: You are using Laman Graphs with a 7 dimensional representation.") 
             print(f"This is not currently supported. Overriding the three_momentum_features variable to True.")
             self.three_momentum_features = True
-
-        # Note: Currently we are only supporting the quark vs gluon dataset from the energyflow package. We can easily modify
-        # the code to support our own Z vs qcd dataset as well.
-            
         
-        if self.classification_task == 'ZvsQCD':
-        
-            print(f'Z.vs.QCD dataset')
-            # Each file contains 100k jets for each class
-            nz = nqcd = self.n_total // 2 
-
-            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset/'
-            Z_jet_filepattern=  f"{directory_path}/ZToQQ*"
-            QCD_jet_filepattern = f"{directory_path}/ZJetsToNuNu*"
-            # read all files with those patterns in '/pscratch/sd/d/dimathan/JetClass_Dataset/'
-            # Getting the list of files that match the patterns
-            Z_jet_files = glob.glob(Z_jet_filepattern)
-            QCD_jet_files = glob.glob(QCD_jet_filepattern)
-
-            print()
-            print(f"Found {len(Z_jet_files)} files matching ZToQQ pattern.")
-            print(f"Found {len(QCD_jet_files)} files matching ZJetsToNuNu pattern.")
-            print()
-
-            x_particles_Z, x_jet_Z, y_Z = np.array([]), np.array([]), np.array([]) 
-            for file in Z_jet_files:
-                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
-                x_particles_Z = np.concatenate((x_particles_Z, x_particles), axis = 0) if x_particles_Z.size else x_particles
-                x_jet_Z = np.concatenate((x_jet_Z, x_jet), axis = 0) if x_jet_Z.size else x_jet
-                y_Z = np.concatenate((y_Z, y), axis = 0) if y_Z.size else y
-                if x_particles_Z.shape[0] >= nz: 
-                    x_particles_Z = x_particles_Z[:nz]
-                    x_jet_Z = x_jet_Z[:nz]
-                    y_Z = y_Z[:nz]
-                    break # Stop reading files if we have enough jets
-            
-            x_particles_qcd, x_jet_qcd, y_qcd = np.array([]), np.array([]), np.array([])
-            for file in QCD_jet_files:
-                x_particles, x_jet, y = read_file(filepath = file, labels = ['label_Zqq', 'label_QCD'])
-                x_particles_qcd = np.concatenate((x_particles_qcd, x_particles), axis = 0) if x_particles_qcd.size else x_particles
-                x_jet_qcd = np.concatenate((x_jet_qcd, x_jet), axis = 0) if x_jet_qcd.size else x_jet
-                y_qcd = np.concatenate((y_qcd, y), axis = 0) if y_qcd.size else y
-                if x_particles_qcd.shape[0] >= nqcd: 
-                    x_particles_qcd = x_particles_qcd[:nqcd]
-                    x_jet_qcd = x_jet_qcd[:nqcd]
-                    y_qcd = y_qcd[:nqcd]
-                    break
-
-            # concatenate the two datasets 
-            self.X_PN = np.concatenate((x_particles_Z, x_particles_qcd), axis = 0)
-            self.Y_PN = np.concatenate((y_Z, y_qcd), axis = 0)
-
-            # print how many jets we've loaded 
-            print()
-            print(f"Loaded {self.X_PN.shape[0]} jets for the Z vs QCD classification task.")
-            print()
-
-            self.Y_PN = self.Y_PN[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
-            # match the shape of the data to the shape of the energyflow data for consistency
-            self.X_PN = np.transpose(self.X_PN, (0, 2, 1))
-        
-        elif self.classification_task == 'qvsg':
-            print(f'q.vs.g dataset')
+        if classification_task == 'qvsg': 
             # Load the four-vectors directly from the quark vs gluon data set
-            self.X_PN, self.Y_PN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                            generator='pythia',  # Herwig is also available
-                                                            with_bc=False        # Turn on to enable heavy quarks
-                                                        )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+            self.X_PN, self.Y_PN = energyflow.datasets.qg_jets.load(num_data=n_total, pad=True, 
+                                                                        generator='pythia',  # Herwig is also available
+                                                                        with_bc=False        # Turn on to enable heavy quarks
+                                                                        )                    # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+        else: 
+            # Each file contains 100k jets for each class
+            n_signal = n_bckg = n_total // 2 
+            #/pscratch/sd/d/dimathan/JetClass_Dataset/t_jets/bqq
+            directory_path = '/pscratch/sd/d/dimathan/JetClass_Dataset'
+            if classification_task == 'ZvsQCD':   
+                signal_jet_filepattern=  f"{directory_path}/Z_jets/ZToQQ*"
+                label_signal = 'label_Zqq'
+            elif classification_task == 'TvsQCD': 
+                signal_jet_filepattern=  f"{directory_path}/t_jets/bqq/TTBar*"
+                label_signal = 'label_Tbqq'
+
+            bckg_jet_filepattern = f"{directory_path}/qg_jets/ZJetsToNuNu*"
+
+            # Getting the list of files that match the patterns
+            signal_jet_files = glob.glob(signal_jet_filepattern)
+            bckg_jet_files = glob.glob(bckg_jet_filepattern)
             
+            x_particles_signal, x_jet_signal, y_signal = np.array([]), np.array([]), np.array([]) 
+            for file in signal_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = [label_signal, 'label_QCD'])
+                x_particles_signal = np.concatenate((x_particles_signal, x_particles), axis = 0) if x_particles_signal.size else x_particles
+                x_jet_signal = np.concatenate((x_jet_signal, x_jet), axis = 0) if x_jet_signal.size else x_jet
+                y_signal = np.concatenate((y_signal, y), axis = 0) if y_signal.size else y
+                if x_particles_signal.shape[0] >= n_signal: 
+                    x_particles_signal = x_particles_signal[:n_signal]
+                    x_jet_signal = x_jet_signal[:n_signal]
+                    y_signal = y_signal[:n_signal]
+                    break # Stop reading files if we have enough jets
+                
+            x_particles_bckg, x_jet_bckg, y_bckg = np.array([]), np.array([]), np.array([])
+            for file in bckg_jet_files:
+                x_particles, x_jet, y = read_file(filepath = file, labels = [label_signal, 'label_QCD'])
+                x_particles_bckg = np.concatenate((x_particles_bckg, x_particles), axis = 0) if x_particles_bckg.size else x_particles
+                x_jet_bckg = np.concatenate((x_jet_bckg, x_jet), axis = 0) if x_jet_bckg.size else x_jet
+                y_bckg = np.concatenate((y_bckg, y), axis = 0) if y_bckg.size else y
+                if x_particles_bckg.shape[0] >= n_bckg: 
+                    x_particles_bckg = x_particles_bckg[:n_bckg]
+                    x_jet_bckg = x_jet_bckg[:n_bckg]
+                    y_bckg = y_bckg[:n_bckg]
+                    break
+            
+            # concatenate the two datasets 
+            X_PN = np.concatenate((x_particles_signal, x_particles_bckg), axis = 0)
+            Y_PN = np.concatenate((y_signal, y_bckg), axis = 0)
+            x_jet = np.concatenate((x_jet_signal, x_jet_bckg), axis = 0)
+
+            print()
+            print(f"Found {len(signal_jet_files)} files matching {classification_task} pattern.")
+            print(f"Found {len(bckg_jet_files)} files matching ZJetsToNuNu pattern.")
+            print()
+            print(f"Loaded {X_PN.shape[0]} jets for the {classification_task} classification task.")
+            print()
+            
+
+            # match the shape of the data to the shape of the energyflow data for consistency
+            self.Y_PN = Y_PN[:, 0] # one-hot encoding, where 0: Background (QCD) and 1: Signal (Z) 
+            self.X_PN = np.transpose(X_PN, (0, 2, 1))
+
+
 
         # Preprocess by centering jets and normalizing pts
         if self.three_momentum_features:                 # Preprocess the jets to create the three_momentum_features for ParticleNet 
+            self.X_PN = self.X_PN[:,:,:3]
             input_dims = 3
             for x_PN in self.X_PN:
                 mask = x_PN[:,0] > 0
@@ -249,6 +246,10 @@ class ParticleNet():
         
         print()
         print(f"particle_net model: {particlenet_model}")
+        print()
+        
+        print(particlenet_model)
+        print(f'Total number of parameters: {sum(p.numel() for p in particlenet_model.parameters())}')
         print()
 
         return particlenet_model 

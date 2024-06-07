@@ -356,7 +356,7 @@ class ParticleNet(nn.Module):
     def __init__(self,
                  input_dims,
                  num_classes,
-                 conv_params=[(16, (64, 64, 64)), (16, (128, 128, 128)), (16, (128, 128, 128) )], # Two EdgeConv layers. The first layer has k=2 because it corresponds to the Laman graph. The second layer has k=7 because it corresponds to the k-nn graph.
+                 conv_params=[(16, (64, 64, 64)), (16, (128, 128, 128)), (16, (256, 256, 256) )], # Two EdgeConv layers. The first layer has k=2 because it corresponds to the Laman graph. The second layer has k=7 because it corresponds to the k-nn graph.
                  fc_params=[(256, 0.1)],                             # One fully connected layer with 128 output channels and a dropout rate of 0.1
                  Laman = False,
                  use_fusion=True,                                    
