@@ -9,7 +9,7 @@ import sys
 import yaml
 import pickle
 from collections import defaultdict
-
+import numpy as np
 import torch
 
 sys.path.append('.')
@@ -133,10 +133,6 @@ class MLAnalysis(common_base.CommonBase):
                     for trim_particles in trim_particles_list:
                         model_info_temp['model_settings']['trim_particles'] = trim_particles
                         self.AUC[model_key], self.roc_curve_dict[model_key] = subjet_transformer.ParT(model_info_temp).train()
-                print('===============================================')
-                print('AUC list: ', auc_list)
-                print('===============================================')
-
 
 
             if model in ['nsub_dnn']:
@@ -159,13 +155,25 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 k_list = model_info_temp['model_settings']['K']
                 cluster_list = model_info_temp['model_settings']['cluster_list']
+                runs = model_info_temp['model_settings']['runs']
+                auc_list = []
+                auc_av_list = []
+                auc_std_list = []
                 for N_cluster in cluster_list:
                     model_info_temp['model_settings']['N_cluster'] = N_cluster
-                    for k in k_list:
-                        model_info_temp['model_settings']['K'] = k
-                        self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_dnn.nsubDNN(model_info_temp).train()
+                    cur_list = []
+                    for run in range(runs):
+                        for k in k_list:
+                            model_info_temp['model_settings']['K'] = k
+                            self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_dnn.nsubDNN(model_info_temp).train()
+                            cur_list.append(self.AUC[model_key])
+                    auc_av_list.append(sum(cur_list)/len(cur_list))
+                    auc_std_list.append(np.std(cur_list))
+                    auc_list.append(cur_list) 
                 print('===============================================')
                 print('AUC list: ', auc_list)
+                print(f'AUC average: {auc_av_list}')
+                print(f'AUC std: {auc_std_list}')
                 print('===============================================')
 
                     
@@ -188,20 +196,29 @@ class MLAnalysis(common_base.CommonBase):
                 model_info_temp['model_key'] = model_key
                 k_list = model_info_temp['model_settings']['K']
                 cluster_list = model_info_temp['model_settings']['cluster_list']
+                runs = model_info_temp['model_settings']['runs']
                 auc_list = []
+                auc_av_list = []
+                auc_std_list = []
                 for N_cluster in cluster_list:
                     model_info_temp['model_settings']['N_cluster'] = N_cluster
-                    for k in k_list:
-                        model_info_temp['model_settings']['K'] = k
-                        self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_trans.nsubTrans(model_info_temp).train()
-                        auc_list.append(self.AUC[model_key]) 
+                    cur_list = []
+                    for run in range(runs):
+                        for k in k_list:
+                            model_info_temp['model_settings']['K'] = k
+                            self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_trans.nsubTrans(model_info_temp).train()                        
+                            cur_list.append(self.AUC[model_key])
+                    auc_av_list.append(sum(cur_list)/len(cur_list))
+                    auc_std_list.append(np.std(cur_list))
+                    auc_list.append(cur_list) 
                 print('===============================================')
                 print('AUC list: ', auc_list)
+                print(f'AUC average: {auc_av_list}')
+                print(f'AUC std: {auc_std_list}')
                 print('===============================================')
 
-            # TODO: PFN (tensorflow)
+            # TODO: PFN 
 
-            # TODO: PFN (pytorch)
 
             # ---------- Write ROC curve dict to file ----------
             output_filename = os.path.join(self.output_dir, f'ROC.pkl')
