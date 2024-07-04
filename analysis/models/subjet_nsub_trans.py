@@ -69,9 +69,7 @@ class nsubTrans():
         self.N_cluster = self.model_info['model_settings']['N_cluster']
 
         self.classification_task = model_info['classification_task']
-        if self.classification_task not in ['ZvsQCD', 'qvsg']: 
-            sys.exit('Invalid classification task. Choose between ZvsQCD and qvsg. For the potential extension to other tasks from JetClass, please check dataloader.py and modify the code accordingly.')
-        
+
         self.n_total = model_info['n_total']
         self.n_train = model_info['n_train']
         self.n_test = model_info['n_test']
@@ -91,18 +89,30 @@ class nsubTrans():
         self.output = defaultdict(list)
 
         # Load the nsubjettiness features
-        if self.classification_task == 'qvsg': 
-            if self.N_cluster in [2, 3, 5, 7, 10, 15]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5'
-            elif self.N_cluster in [4, 6, 8]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N468/subjets_unshuffled.h5'
-            else: 
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N203040506080100/subjets_unshuffled.h5'
+        if self.classification_task == 'qvsg':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N23456781015/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N506080100/subjets_unshuffled.h5'
+
         elif self.classification_task == 'ZvsQCD':
-            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10, 15]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N23456781015/subjets_unshuffled.h5'
-            else:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100/subjets_unshuffled.h5'
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N234567810/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N506080100/subjets_unshuffled.h5'
+        
+        elif self.classification_task == 'TvsQCD':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N234567810/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N506080100/subjets_unshuffled.h5'
+            
 
         
         with h5py.File(path, 'r') as hf:
@@ -227,7 +237,7 @@ class nsubTrans():
                 output_positive_class_val = output_val[:, 1]
                 output_positive_class_test = output_test[:, 1]
 
-                #Compute AUC (move tensors to CPU for sklearn compatibility)
+                # Compute AUC (move tensors to CPU for sklearn compatibility)
                 auc_train = roc_auc_score(Y_train[:10000], output_positive_class_train.cpu().numpy())
                 auc_val = roc_auc_score(Y_val, output_positive_class_val.cpu().numpy())
                 roc_val = roc_curve(Y_val, output_positive_class_val.cpu().numpy())
@@ -244,6 +254,15 @@ class nsubTrans():
             print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC_train = {auc_train:.4f}, AUC val = {auc_val:.4f}, AUC test = {auc_test:.4f}")
         
         time_end = time.time()
+        FPR = best_roc_val[0]
+        TPR = best_roc_val[1]
+
+        # TPR is the signal efficiency and is ordered. Use bisect to find the index for the TPR we want 
+        e_05 = np.searchsorted(TPR, 0.5)
+        e_06 = np.searchsorted(TPR, 0.6)
+        e_07 = np.searchsorted(TPR, 0.7)
+        e_08 = np.searchsorted(TPR, 0.8)
+        e_09 = np.searchsorted(TPR, 0.9)
         print(f'--------------------------------------------------------------------')
         print()
         print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
@@ -252,6 +271,9 @@ class nsubTrans():
         print(f"Best AUC on the test set = {best_auc_test:.4f}")
         print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
         print()
+        print(f"At TPR: {TPR[e_05]:.2f}, 1/FPR (background rejection) = {1/FPR[e_05]:.2f}")
+        print(f"At TPR: {TPR[e_08]:.2f}, 1/FPR (background rejection) = {1/FPR[e_08]:.2f}")
+        print()
 
-        return best_auc_val, best_roc_val
+        return best_auc_val, best_roc_val, 1/FPR[e_05], 1/FPR[e_08]
 

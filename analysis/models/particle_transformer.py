@@ -246,16 +246,20 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
         tot_n = 0 
         total_n1=0
         tot_n2 = 0
+        total_3n = 0
         for b in range(batch_size):
             edges = torch.sum(mask[b], dim=[0, 1])
             tot_2n3 += edges / (2*valid_n[b]-3)
             tot_n += edges / valid_n[b]
             tot_n2 += edges / (1/2*valid_n[b]*(valid_n[b]-1))
             total_n1 += edges / (valid_n[b]-1)
+            total_3n += edges / (3*valid_n[b]-6)
+
         av_2n3 = tot_2n3 / batch_size
         av_n = tot_n / batch_size
         av_n1 = total_n1 / batch_size
         av_n2 = tot_n2 / batch_size
+        av_3n = total_3n / batch_size
 
         #    if 2 * sum_true_per_batch[b] > valid_n[b]*(valid_n[b]-1) :
         #        print('found a graph with more than 100% connectivity')
@@ -267,6 +271,8 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
         print(f"Average number of edges = {average_true.item()}")
         #print(f'edges/2n-3 = {average_true.item()/(2*torch.mean(valid_n_f)-3)}')
         print(f'actual edges/2n-3 = {av_2n3}')
+        print()
+        print(f'actual edges/(3n-6) = {av_3n:.4f}')
         print()
         #print(f'edges/n = {average_true.item()/(torch.mean(valid_n_f))}')
         print(f'actual edges/n = {av_n}')
@@ -465,7 +471,6 @@ def laman_knn(x, angles = 0, extra_info = False):
     
     # add 3 rows of -inf to the top of the pairwise_distance tensor to make it of shape (batch_size, num_particles, num_particles)
     # this is because we remove the 3 hardest particles from the graph and we don't want to connect them to the rest of the particles
-    # print pairwisedistance device 
     #print(f'pairwise_distance.device = {pairwise_distance.device}')
     pairwise_distance = torch.cat((torch.ones((batch_size, 3, num_particles), device = device)*float('-inf'), pairwise_distance), dim=1)
 
@@ -567,6 +572,108 @@ def rand_graph(x):
     adjacency_matrices = adjacency_matrices | adjacency_matrices.transpose(1, 2)
 
     return adjacency_matrices
+
+
+
+def unique_graph(x, angles = 0, extra_info = False):
+    # check if x is a numpy array, if not convert it to a numpy array
+    if isinstance(x, np.ndarray):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        x = torch.from_numpy(x).to(device)
+    else: 
+        device  = x.device
+
+    non_zero_particles = torch.norm(x, p=2, dim=1) != 0
+    valid_n = non_zero_particles.sum(axis = 1)
+
+    batch_size, _, num_particles = x.size()
+    px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
+
+    rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
+    phi = torch.atan2(py, px)
+    
+    x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
+
+    inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
+    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
+
+    # Connect the 4 hardest particles in the jet in a fully connected graph
+    idx_3 = pairwise_distance[:, :4, :4].topk(k=4, dim=-1) # (batch_size, 3, 2)
+    #print(f'idx_3[1].shape = {idx_3[1].shape}')
+    #print(f'idx_3[1] = {idx_3[1]}')
+    #print()
+    #print(f'idx_3[0] = {idx_3[0]}')
+    idx_3 = [idx_3[0][:,:,1:], idx_3[1][:,:,1:]] # (batch_size, 3, 1)
+
+    # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
+    pairwise_distance = pairwise_distance[:, 4:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
+    
+    # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
+    pairwise_distance = torch.tril(pairwise_distance, diagonal=3) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=4)  # -inf because topk indices return the biggest values -> we've made all distances negative 
+
+    # Find the indices of the 3 nearest neighbors for each particle
+        
+    idx = pairwise_distance.topk(k=3, dim=-1) # It returns two things: values, indices 
+    idx = idx[1] # (batch_size, num_points - 3, 2)
+
+    #print(f'idx_3.shape = {idx_3[1].shape}')
+    #print(f'idx.shape = {idx.shape}')
+    #print()
+    #print(f'idx_3 = {idx_3[1]}')
+    #print(f'idx = {idx}')
+    
+    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 3 nearest neighbors for the rest of the particles
+    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
+
+    # add 3 rows of -inf to the top of the pairwise_distance tensor to make it of shape (batch_size, num_particles, num_particles)
+    # this is because we remove the 3 hardest particles from the graph and we don't want to connect them to the rest of the particles
+    #print(f'pairwise_distance.device = {pairwise_distance.device}')
+    pairwise_distance = torch.cat((torch.ones((batch_size, 3, num_particles), device = device)*float('-inf'), pairwise_distance), dim=1)
+
+    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool).to(device)
+
+    # Efficiently populate the boolean mask based on laman_indices
+    for i in range(3):  # Assuming each particle is connected to two others as per laman_indices
+        # Extract the current set of indices indicating connections
+        current_indices = idx[:, :, i]
+
+        # Generate a batch and source particle indices to accompany current_indices for scatter_
+        batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
+        src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
+
+        # Use scatter_ to update the bool_mask; setting the connection locations to True
+        bool_mask[batch_indices, src_particle_indices, current_indices] = True
+
+    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
+    mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0).to(device)
+    bool_mask = bool_mask & mask_upper.unsqueeze(0)
+
+    # Remove the padded particles from the graph to save memory space when converting to sparse representation.
+    range_tensor = torch.arange(num_particles, device = device).unsqueeze(0).unsqueeze(-1)  
+    expanded_valid_n = valid_n.unsqueeze(-1).unsqueeze(-1)
+    mask = (range_tensor >= expanded_valid_n).to(device)
+    final_mask = mask | mask.transpose(1, 2)
+
+    bool_mask = bool_mask & ~final_mask
+
+    # Remove some angles at random between the particles. Default value of angles = 0.
+    bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
+
+    # Make the Laman Edges bidirectional 
+    bool_mask = bool_mask | bool_mask.transpose(1, 2)
+
+    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
+    # TODO: Change this code to work with numpy from the start
+    #bool_mask = bool_mask.numpy() 
+    bool_mask = bool_mask.cpu()
+
+    if extra_info:
+        # Calculate the number of connected components
+        connected_components(bool_mask, x)
+
+    return bool_mask 
 
 
 def split_into_batches(tensor, batch_size):
@@ -985,9 +1092,12 @@ class ParT():
                 elif self.graph_type == 'knn_graph':
                     k = self.k
                     graph = np.concatenate([knn(X[i * chunk_size:(i + 1) * chunk_size], k = k, extra_info=True if i==0 else False) for i in range(chunks)] )
-                    
+                
+                elif self.graph_type == 'unique_graph':
+                    graph = torch.cat([unique_graph(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)] )
+                    print('here')
                 else: 
-                    sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors' and 'knn_graph'") 
+                    sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors', 'knn_graph' and 'unique_graph'") 
 
                 print(f"Time to create the graph = {time.time() - t_st} seconds")
              

@@ -86,22 +86,35 @@ class nsubDNN():
         self.output = defaultdict(list)
 
         # Load the nsubjettiness features
-        if self.classification_task == 'qvsg': 
-            if self.N_cluster in [2, 3, 5, 7, 10, 15]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5'
-            elif self.N_cluster in [4, 6, 8]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N468/subjets_unshuffled.h5'
-            else: 
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_200k_N203040506080100/subjets_unshuffled.h5'
+        if self.classification_task == 'qvsg':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N23456781015/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N506080100/subjets_unshuffled.h5'
+
         elif self.classification_task == 'ZvsQCD':
-            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10, 15]:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N23456781015/subjets_unshuffled.h5'
-            else:
-                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100/subjets_unshuffled.h5'
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N234567810/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N506080100/subjets_unshuffled.h5'
+        
+        elif self.classification_task == 'TvsQCD':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N234567810/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N506080100/subjets_unshuffled.h5'
+            
+
 
         
         with h5py.File(path, 'r') as hf:
-            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-1)]
+            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-1)-1]
             self.Y = hf[f'y'][:self.n_total]
             
         print('loaded from file')
@@ -115,7 +128,7 @@ class nsubDNN():
 
 
     #---------------------------------------------------------------
-    def init_model(self, hidden_size = 256, dropout = 0.05):
+    def init_model(self, hidden_size = 100, dropout = 0.05):
         '''
         :return: pytorch architecture
         '''
@@ -227,6 +240,16 @@ class nsubDNN():
             print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC train = {auc_train:.4f}, AUC val = {auc_val:.4f}, AUC test = {auc_test:.4f}")
         
         time_end = time.time()
+        FPR = best_roc_val[0]
+        TPR = best_roc_val[1]
+
+        # TPR is the signal efficiency and is ordered. Use bisect to find the index for the TPR we want 
+        e_05 = np.searchsorted(TPR, 0.5)
+        e_06 = np.searchsorted(TPR, 0.6)
+        e_07 = np.searchsorted(TPR, 0.7)
+        e_08 = np.searchsorted(TPR, 0.8)
+        e_09 = np.searchsorted(TPR, 0.9)
+
         print(f'--------------------------------------------------------------------')
         print()
         print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
@@ -235,7 +258,10 @@ class nsubDNN():
         print(f"Best AUC on the test set = {best_auc_test:.4f}")
         print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
         print()
+        print(f"At TPR: {TPR[e_05]:.2f}, 1/FPR (background rejection) = {1/FPR[e_05]:.2f}")
+        print(f"At TPR: {TPR[e_08]:.2f}, 1/FPR (background rejection) = {1/FPR[e_08]:.2f}")
+        print()
 
-        return best_auc_val, best_roc_val
+        return best_auc_val, best_roc_val, 1/FPR[e_05], 1/FPR[e_08]
 
 

@@ -5,7 +5,7 @@
 #------------------------------------------------------------------
 
 # Which dataset/Jet Classification problem to use
-classification_task: 'ZvsQCD' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
+classification_task: 'TvsQCD' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
 
 # Size of labeled data to load (i.e. number of jets). Recommended split: 80/10/10
 # The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
@@ -16,7 +16,16 @@ n_test:  50000
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
 #               particle_net, particle_net_laman, particle_transformer, particle_transformer_graph, nsub_transformer, nsub_dnn, subjet_transformer, subjet_transformer_graph
-models: ['subjet_transformer']
+models: ['particle_transformer_graph']
+
+efp: 
+    graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
+    batch_size: 512  
+    epochs: 10
+    learning_rate: 0.0005
+    d: 6                    # maximal degree of the EFPs
+    efp_measure: 'hadr'       
+    efp_beta: 0.5            # Exponent of the pairwise distance
 
 particle_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
@@ -34,18 +43,18 @@ particle_transformer:
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     batch_size: 256
-    epochs: 2
+    epochs: 20
     learning_rate: 0.0008
     pair_input_dim: 4 
 
     load_model: False             # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False             # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    graph : 'laman_knn_graph'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
+    graph : 'unique_graph'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph', 'unique_graph'
     k : 2                         # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
     sorting_key: 'pt'             # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph.  
                                   # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
 
-    add_angles: 80      # How many angles to add (+) or remove (-) from the Laman Graph.
+    add_angles: 0      # How many angles to add (+) or remove (-) from the Laman Graph.
                         # The default is 0: When add_angles < 0 and  abs(add_angles)> n_particles^jet - 2, the graph will be disconnected, so in the code
                         # we set remove_angles = min(remove_angles, n_particles^jet - 2) to avoid this issue. 
                         # The average jet has ~40 particles and only ~2% of the jets have less than 15 particles.
@@ -54,9 +63,9 @@ particle_transformer_graph:
 
 subjet_transformer:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    cluster_list: [5]
+    cluster_list: [12, 20, 40]
     batch_size: 512
-    epochs: 3
+    epochs: 1
     learning_rate: 0.001
     input_dim:      1 # number of input features, if 4: use 4dim feature space (pt, eta, phi, mass). If 1: use only the  pt of each particle.
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
@@ -68,9 +77,9 @@ subjet_transformer:
 
 subjet_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    cluster_list: [3, 5]
+    cluster_list: [100]
     batch_size: 512
-    epochs: 2
+    epochs: 1
     learning_rate: 0.001
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
 
@@ -100,13 +109,13 @@ nsub_dnn:
 
 subjet_nsub_dnn: 
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    runs: 5
-    cluster_list: [2, 5, 10, 15, 20]
+    runs: 2
+    cluster_list: [2, 3,]
 
     batch_size: 512
-    epochs: 20
+    epochs: 30
     learning_rate: 0.0002
-    K: [21]
+    K: [11]
 
 
 nsub_transformer: 
@@ -118,10 +127,10 @@ nsub_transformer:
 
 subjet_nsub_transformer: 
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    runs: 4
-    cluster_list: [2, 3, 4, 5, 6, 7, 8, 10]
+    runs: 2
+    cluster_list: [2, 3, 4,]
     batch_size: 512
-    epochs: 70
+    epochs: 7
     learning_rate: 0.0002
     K: [21]
 

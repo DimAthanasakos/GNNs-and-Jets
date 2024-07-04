@@ -15,7 +15,7 @@ import torch
 sys.path.append('.')
 from base import common_base
 import data_IO
-from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn, subjet_transformer, subjet_nsub_dnn, subjet_nsub_trans
+from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn, subjet_transformer, subjet_nsub_dnn, subjet_nsub_trans, efp
 
 
 ################################################################
@@ -100,6 +100,13 @@ class MLAnalysis(common_base.CommonBase):
                           'torch_device': self.torch_device,
                           'output_dir': self.output_dir,
                           'gpu_mode': self.gpu_mode}
+            
+            if model=='efp':
+                model_key = f'{model}'
+                print(f'model_key: {model_key}')
+                model_info_temp = model_info.copy()
+                model_info_temp['model_key'] = model_key
+                self.AUC[model_key], self.roc_curve_dict[model_key] = efp.efpDNN(model_info_temp).train()
 
             if model in ['particle_net', 'particle_net_laman']: 
                 model_key = f'{model}'
@@ -159,21 +166,44 @@ class MLAnalysis(common_base.CommonBase):
                 auc_list = []
                 auc_av_list = []
                 auc_std_list = []
+                e_05_list = []
+                e_08_list = []
+                e_05_av_list = []
+                e_08_av_list = []
+                e_05_std_list = []
+                e_08_std_list = []
                 for N_cluster in cluster_list:
                     model_info_temp['model_settings']['N_cluster'] = N_cluster
-                    cur_list = []
+                    auc_cur_list, e05_list, e08_list = [], [], []
+
                     for run in range(runs):
                         for k in k_list:
                             model_info_temp['model_settings']['K'] = k
-                            self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_dnn.nsubDNN(model_info_temp).train()
-                            cur_list.append(self.AUC[model_key])
-                    auc_av_list.append(sum(cur_list)/len(cur_list))
-                    auc_std_list.append(np.std(cur_list))
-                    auc_list.append(cur_list) 
+                            self.AUC[model_key], self.roc_curve_dict[model_key], e_05, e_08  = subjet_nsub_dnn.nsubDNN(model_info_temp).train()
+                            auc_cur_list.append(self.AUC[model_key])
+                            e05_list.append(e_05)
+                            e08_list.append(e_08)
+                    auc_av_list.append(sum(auc_cur_list)/len(auc_cur_list))
+                    auc_std_list.append(np.std(auc_cur_list) if len(auc_cur_list) > 1 else 0)
+                    auc_list.append(auc_cur_list) 
+                    e_05_av_list.append(sum(e05_list)/len(e05_list))
+                    e_05_std_list.append(np.std(e05_list) if len(e05_list) > 1 else 0)
+                    e_05_list.append(e05_list)
+                    e_08_av_list.append(sum(e08_list)/len(e08_list))
+                    e_08_std_list.append(np.std(e08_list) if len(e08_list) > 1 else 0)
+                    e_08_list.append(e08_list)
                 print('===============================================')
                 print('AUC list: ', auc_list)
                 print(f'AUC average: {auc_av_list}')
                 print(f'AUC std: {auc_std_list}')
+                print()
+                print(f'e_05 list: {e_05_list}')
+                print(f'e_05 average: {e_05_av_list}')
+                print(f'e_05 std: {e_05_std_list}')
+                print()
+                print(f'e_08 list: {e_08_list}')
+                print(f'e_08 average: {e_08_av_list}')
+                print(f'e_08 std: {e_08_std_list}')
                 print('===============================================')
 
                     
@@ -200,21 +230,43 @@ class MLAnalysis(common_base.CommonBase):
                 auc_list = []
                 auc_av_list = []
                 auc_std_list = []
+                e_05_list = []
+                e_08_list = []
+                e_05_av_list = []
+                e_08_av_list = []
+                e_05_std_list = []
+                e_08_std_list = []
                 for N_cluster in cluster_list:
                     model_info_temp['model_settings']['N_cluster'] = N_cluster
-                    cur_list = []
+                    auc_cur_list, e05_list, e08_list = [], [], []
                     for run in range(runs):
                         for k in k_list:
                             model_info_temp['model_settings']['K'] = k
-                            self.AUC[model_key], self.roc_curve_dict[model_key]  = subjet_nsub_trans.nsubTrans(model_info_temp).train()                        
-                            cur_list.append(self.AUC[model_key])
-                    auc_av_list.append(sum(cur_list)/len(cur_list))
-                    auc_std_list.append(np.std(cur_list))
-                    auc_list.append(cur_list) 
+                            self.AUC[model_key], self.roc_curve_dict[model_key], e_05, e_08   = subjet_nsub_trans.nsubTrans(model_info_temp).train()                        
+                            auc_cur_list.append(self.AUC[model_key])
+                            e05_list.append(e_05)
+                            e08_list.append(e_08)
+                    auc_av_list.append(sum(auc_cur_list)/len(auc_cur_list))
+                    auc_std_list.append(np.std(auc_cur_list) if len(auc_cur_list) > 1 else 0)
+                    auc_list.append(auc_cur_list) 
+                    e_05_av_list.append(sum(e05_list)/len(e05_list))
+                    e_05_std_list.append(np.std(e05_list) if len(e05_list) > 1 else 0)
+                    e_05_list.append(e05_list)
+                    e_08_av_list.append(sum(e08_list)/len(e08_list))
+                    e_08_std_list.append(np.std(e08_list) if len(e08_list) > 1 else 0)
+                    e_08_list.append(e08_list)
                 print('===============================================')
                 print('AUC list: ', auc_list)
                 print(f'AUC average: {auc_av_list}')
                 print(f'AUC std: {auc_std_list}')
+                print()
+                print(f'e_05 list: {e_05_list}')
+                print(f'e_05 average: {e_05_av_list}')
+                print(f'e_05 std: {e_05_std_list}')
+                print()
+                print(f'e_08 list: {e_08_list}')
+                print(f'e_08 average: {e_08_av_list}')
+                print(f'e_08 std: {e_08_std_list}')
                 print('===============================================')
 
             # TODO: PFN 

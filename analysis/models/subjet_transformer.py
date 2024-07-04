@@ -571,20 +571,6 @@ def rand_graph(x):
     return adjacency_matrices
 
 
-def split_into_batches(tensor, batch_size):
-    if tensor is None:
-        return None
-    num_batches = (tensor.size(0) + batch_size - 1) // batch_size
-    return [tensor[i * batch_size:min((i + 1) * batch_size, tensor.size(0))] for i in range(num_batches)]
-
-
-def broadcast_batches(batches, src):
-    if batches is None:
-        return
-    for batch in batches:
-        dist.broadcast(batch, src=src)
-
-
 
 class ParT():
     
@@ -633,7 +619,6 @@ class ParT():
             self.local_rank = 0
 
 
-        #TODO: watch out
         self.N_cluster = self.model_info['model_settings']['N_cluster']
 
 
@@ -655,9 +640,6 @@ class ParT():
         self.load_model = model_info['model_settings']['load_model'] # Load a pre-trained model or not
         self.save_model = model_info['model_settings']['save_model'] # Save the model or not
       
-        self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
-        if self.input_dim not in [1, 4]:
-            raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 or 4') 
         
         self.pair_input_dim = model_info['model_settings']['pair_input_dim']  # how many interaction terms for pair of particles. 
                                                                               # If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ),
@@ -676,11 +658,16 @@ class ParT():
 
         if model_info['model_key'].endswith('graph'): # Graph-Transfomer, e.g. Laman Graph or a KNN Graph
             self.graph_transformer = True
+            self.input_dim = 1
             self.graph_type = self.model_info['model_settings']['graph']
             self.add_angles = model_info['model_settings']['add_angles']
             if self.graph_type == 'knn_graph': self.k = model_info['model_settings']['k']
             if self.graph_type == 'laman_knn_graph': self.sorting_key = model_info['model_settings']['sorting_key']
 
+        else: 
+            self.input_dim = model_info['model_settings']['input_dim'] # 4 for (px, py, pz, E) as input for each particle, 1 for pt
+            if self.input_dim not in [1, 4]:
+                raise ValueError('Invalid input_dim at the config file for ParT. Must be 1 or 4') 
 
         self.train_loader, self.val_loader, self.test_loader = self.init_data()
 
@@ -696,10 +683,34 @@ class ParT():
         # github repository mentioned above.
 
         if self.local_rank == 0:
+            if self.classification_task == 'qvsg':
+                if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N23456781015/subjets_unshuffled.h5'
+                elif self.N_cluster in [12, 15, 20, 30, 40]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N1215203040/subjets_unshuffled.h5'
+                elif self.N_cluster in [50, 60, 80, 100]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N506080100/subjets_unshuffled.h5'
+
+            elif self.classification_task == 'ZvsQCD':
+                if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N234567810/subjets_unshuffled.h5'
+                elif self.N_cluster in [12, 15, 20, 30, 40]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+                elif self.N_cluster in [50, 60, 80, 100]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N506080100/subjets_unshuffled.h5'
             
-            with h5py.File('/pscratch/sd/d/dimathan/GNN/exclusive_subjets_200k/subjets_unshuffled.h5', 'r') as hf:
-                self.Y_ParT = hf[f'y'][:]
-                self.X_ParT = hf[f'subjet_N{self.N_cluster}_sub_X'][:,:,:]
+            elif self.classification_task == 'TvsQCD':
+                if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N234567810/subjets_unshuffled.h5'
+                elif self.N_cluster in [12, 15, 20, 30, 40]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+                elif self.N_cluster in [50, 60, 80, 100]:
+                    path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N506080100/subjets_unshuffled.h5'
+
+
+            with h5py.File(path, 'r') as hf:
+                self.Y_ParT = hf[f'y'][:self.n_total]
+                self.X_ParT = hf[f'subjet_N{self.N_cluster}_sub_X'][:self.n_total,:,:]
 
 
             print(f'X_ParT.shape: {self.X_ParT.shape}')
@@ -979,6 +990,13 @@ class ParT():
 
         time_end = time.time()
         if self.local_rank == 0:
+            FPR = best_roc_val[0]
+            TPR = best_roc_val[1]
+
+            # TPR is the signal efficiency and is ordered. Use bisect to find the index for the TPR we want 
+            e_05 = np.searchsorted(TPR, 0.5)
+            e_08 = np.searchsorted(TPR, 0.8)
+
             print("--------------------------------")
             print()
             print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
@@ -987,12 +1005,15 @@ class ParT():
             print(f"Best AUC on the test set = {best_auc_test:.4f}")
             print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
             print()
+            print(f"At TPR: {TPR[e_05]:.2f}, 1/FPR (background rejection) = {1/FPR[e_05]:.2f}")
+            print(f"At TPR: {TPR[e_08]:.2f}, 1/FPR (background rejection) = {1/FPR[e_08]:.2f}")
+            print()
             if self.save_model:
                 path = f'/global/homes/d/dimathan/GNNs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
                 print(f"Saving model to {path}")
                 torch.save(best_model_params, path) 
    
-        return best_auc_val, best_roc_val
+        return best_auc_val, best_roc_val 
 
         
     #---------------------------------------------------------------

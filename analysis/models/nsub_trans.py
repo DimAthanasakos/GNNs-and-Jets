@@ -92,7 +92,7 @@ class nsubTrans():
         self.output = defaultdict(list)
 
         with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
-            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-1)]
+            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-1)-1]
             self.Y = np.array(f['Y'])[:self.n_total]
         print('loaded from file')
         print()

@@ -155,12 +155,6 @@ class Process(common_base.CommonBase):
             hf.create_dataset('N_clustering', data = self.N_cluster_list)   
             
 
-        #with h5py.File(self.output_dir, 'w') as f:
-        #    f.create_dataset('X_nsub', data=self.X_nsub)
-        #    f.create_dataset('Y', data=self.Y)
-        #    print('Data written to file')
-        #    print()
-
     #---------------------------------------------------------------
     def init_data(self):
         '''
@@ -174,7 +168,7 @@ class Process(common_base.CommonBase):
                                                                 with_bc=False        # Turn on to enable heavy quarks
                                                             )                        # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
         
-        elif self.classification_task == 'ZvsQCD':
+        else:
             # Each file contains 100k jets for each class
             n_signal = n_bckg = self.n_total // 2 
             #/pscratch/sd/d/dimathan/JetClass_Dataset/t_jets/bqq
@@ -380,6 +374,6 @@ class Process(common_base.CommonBase):
 if __name__ == '__main__':
     # Path to store the nsubs file. Be careful with overwriting.
     
-    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_200k_N203040506080100'
-    Process(dir, n_total = 200000, N_cluster_list = [20, 30, 40, 50, 60, 80, 100], K = 21, classification_task = 'ZvsQCD')
+    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N506080100'
+    Process(dir, n_total = 500000, N_cluster_list = [50, 60, 80, 100], K = 21, classification_task = 'TvsQCD')
     print('done')

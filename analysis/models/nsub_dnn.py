@@ -78,19 +78,34 @@ class nsubDNN():
         self.learning_rate = self.model_info['model_settings']['learning_rate']
         self.epochs = self.model_info['model_settings']['epochs']
         self.K = self.model_info['model_settings']['K']
+        self.N_cluster = self.model_info['model_settings']['N_cluster']
 
         self.output = defaultdict(list)
-        self.N_list = []
-        self.beta_list = []
+        
 
-        for i in range(self.K-2):
-            self.N_list += [i+1] * 3
-            self.beta_list += [0.5,1,2]
+        self.classification_task = model_info['classification_task'] 
+
+        if self.classification_task == 'qvsg':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N23456781015/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_qvsg_500k_N506080100/subjets_unshuffled.h5'
+
+        elif self.classification_task == 'ZvsQCD':
+            if self.N_cluster in [2, 3, 4, 5, 6, 7, 8, 10]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N234567810/subjets_unshuffled.h5'
+            elif self.N_cluster in [12, 15, 20, 30, 40]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N1215203040/subjets_unshuffled.h5'
+            elif self.N_cluster in [50, 60, 80, 100]:
+                path = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_ZvsQCD_500k_N506080100/subjets_unshuffled.h5'
+
+        with h5py.File(path, 'r') as hf:
+            self.X_nsub = np.array(hf[f'nsub_subjet_N{self.N_cluster}'])[:self.n_total, :3*(self.K-1) - 1]
+            self.Y = hf[f'y'][:self.n_total]
 
         
-        with h5py.File('/pscratch/sd/d/dimathan/GNN/nsubs.h5', 'r') as f:
-            self.X_nsub = np.array(f['X_nsub'])[:self.n_total, :3*(self.K-2)]
-            self.Y = np.array(f['Y'])[:self.n_total]
         print('loaded from file')
         print()
 
@@ -194,7 +209,7 @@ class nsubDNN():
                 
                 # Compute outputs
                 output_train = self.model(X_train_tensor)
-                output_val = self.model(X_val_tensor)
+                output_val = self.model(X_val_tensor) 
                 output_test = self.model(X_test_tensor)
                 
                 # Compute AUC (move tensors to CPU for sklearn compatibility)
@@ -208,15 +223,24 @@ class nsubDNN():
                     best_auc_val = auc_val
                     best_roc_val = roc_val
 
+                # lets calculate accurace in val and test: 
+                val_accuracy = sklearn.metrics.accuracy_score(Y_val, output_val.cpu().numpy()> 0.) # >0 and not >0.5 because we are not using sigmoid activation
+                test_accuracy = sklearn.metrics.accuracy_score(Y_test, output_test.cpu().numpy() > 0.)
 
+                # print the first 10 predictions and true values
+                #print(f'--------------------------------------------------------------------')
+                #print(f'self.model(X_val_tensor).shape: {self.model(X_val_tensor).shape}')
+                #print(f'Predictions: {(output_val.cpu().numpy())[:10]}')
+                #print(f'True values: {Y_val[:10]}')
             # with 4 decimal places
             print(f'--------------------------------------------------------------------')
-            print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC train = {auc_train:.4f}, AUC val = {auc_val:.4f}, AUC test = {auc_test:.4f}")
+            print(f"Epoch {epoch+1}: loss = {loss.item():.4f}, AUC train = {auc_train:.4f}, val accuracy = {val_accuracy:.4f}, AUC val = {auc_val:.4f}, test accuracy = {test_accuracy:.4f}, AUC test = {auc_test:.4f}")
         
         time_end = time.time()
         print(f'--------------------------------------------------------------------')
         print()
         print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
+        print(f'N_cluster = {self.N_cluster}')
         print(f'K: {self.K}')
         print(f"Best AUC on the test set = {best_auc_test:.4f}")
         print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
@@ -231,15 +255,16 @@ class nsubDNN():
 if __name__ == '__main__':
     model_info = {
         'output_dir': '/pscratch/sd/d/dimathan/OT/test_output',
-        'n_total': 2000,
-        'n_train': 1600, 
-        'n_test': 200,
-        'n_val': 200,
+        'n_total': 20000,
+        'n_train': 16000, 
+        'n_test': 2000,
+        'n_val': 2000,
         'model_settings': {
-            'epochs':10,
-            'learning_rate':0.0003,
-            'batch_size':512,
-            'K': 10
+            'epochs':40,
+            'learning_rate':0.0002,
+            'batch_size':256,
+            'K': 2,
+            'N_cluster': 100,
         }
     }
     classifier = nsubDNN(model_info)
