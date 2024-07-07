@@ -1096,6 +1096,7 @@ class ParT():
                 elif self.graph_type == 'unique_graph':
                     graph = torch.cat([unique_graph(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)] )
                     print('here')
+                
                 else: 
                     sys.exit("Invalid graph type for Laman Graphs. Choose between 'laman_random_graph', 'laman_knn_graph, '2n3_nearest_neighbors', 'knn_graph' and 'unique_graph'") 
 
