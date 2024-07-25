@@ -5,13 +5,13 @@
 #------------------------------------------------------------------
 
 # Which dataset/Jet Classification problem to use
-classification_task: 'TvsQCD' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
+classification_task: 'qvsg' # Choices: 'qvsg', 'ZvsQCD', 'TvsQCD'. The 'qvsg' dataset: EnergyFlow. The other dataset: JetClass
 
 # Size of labeled data to load (i.e. number of jets). Recommended split: 80/10/10
 # The qvsg dataset has 2M jets, the ZvsQCD dataset currently has 2M jets, but we can download more if needed (although training would be tough). 
-n_train: 400000
-n_val:   50000
-n_test:  50000
+n_train: 160000
+n_val:   20000
+n_test:  20000
 
 
 # Select model: subjet_gcn_pytorch, subjet_gat_pytorch, particle_gcn_pytorch, particle_gat_pytorch, 
@@ -42,14 +42,14 @@ particle_transformer:
 
 particle_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
-    batch_size: 256
-    epochs: 20
-    learning_rate: 0.0008
+    batch_size: 512
+    epochs: 10
+    learning_rate: 0.001
     pair_input_dim: 4 
 
     load_model: False             # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False             # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    graph : 'unique_graph'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph', 'unique_graph'
+    graph : 'unique_1N2N3N'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph', 'unique_graph', 'laman_1N2N', 'unique_1N2N3N'
     k : 2                         # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
     sorting_key: 'pt'             # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph.  
                                   # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
@@ -79,13 +79,13 @@ subjet_transformer_graph:
     graph_types: ['disconnected'] # placeholder name for the graph type since the fully connected graph is constructed in the architecture script 
     cluster_list: [100]
     batch_size: 512
-    epochs: 1
+    epochs: 2
     learning_rate: 0.001
     pair_input_dim: 4 # how many interaction terms for pair of particles. If 3: use (dR, k_t = min(pt_1, pt_2)*dR, z = min(pt_1, pt_2)/(pt_1 + pt_2) ), if 4: also use m^2 = (E1 + E2)^2 - (p1 + p2)^2    
 
     load_model: False # if True, load the pre-trained model from the path specified in the architecture script. Else, train the model from scratch.
     save_model: False # if True, save the trained model to the path specified in the architecture script. Else, do not save the model.
-    graph : 'laman_knn_graph'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph'
+    graph : 'laman_1N2N'     # Choices: 'laman_knn_graph' (best) , 'laman_random_graph' ,  '2n3_nearest_neighbors', 'knn_graph', 'laman_1N2N'
     k : 2                         # If graph = 'knn_graph': Number of nearest neighbors to consider in the graph construction. 
     sorting_key: 'pt'             # If graph = laman_knn_graph, this is the key to sort the particles before constructing the graph. 
                                   # Choices: 'pt', 'angularity_increasing' , 'angularity_decreasing' 
