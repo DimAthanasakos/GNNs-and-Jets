@@ -28,12 +28,16 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
+import torch._dynamo
+torch._dynamo.config.cache_size_limit = 32  
+from torch import amp 
 
 import networkx
 import energyflow
 from analysis.architectures import ParticleTransformer  
 import random
 
+from tqdm import tqdm
 from dataloader import read_file
 
 def laman_graph(x): # For now this is not used 
@@ -158,8 +162,7 @@ def random_laman_graph(x):
     return bool_mask 
         
 
-def angles_laman(x, mask, angles = 0, pairwise_distance = None):
-
+def angles_laman(x, mask, angles = 0, pairwise_distance = None, extra_info = False):
     batch_size, _, num_particles = mask.size()
     if isinstance(x, np.ndarray):
         non_zero_particles = np.linalg.norm(x, axis=1) != 0
@@ -241,7 +244,7 @@ def angles_laman(x, mask, angles = 0, pairwise_distance = None):
     average_true = torch.mean(sum_true_per_batch.float())  # Convert to float for mean calculation
 
     # Print info on the graphs. Very intensive computationally, so we keep it as an option 
-    if True: 
+    if extra_info: 
         tot_2n3 = 0
         tot_n = 0 
         total_n1=0
@@ -446,10 +449,10 @@ def unique_1N2N3N(x, extra_info = False):
     
     bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool).to(device)
     #print(f'time to initialize bool mask = {time.time() - t_start:.3f}')
-    # Create indices for the particles, excluding the first two (for i0 and i1)
+
+    # Create indices for the particles, excluding the first three
     indices = torch.arange(3, num_particles)
 
-    # Using broadcasting and advanced indexing to set the desired mask values
     bool_mask[:, 0, indices] = True
     bool_mask[:, 1, indices] = True
     bool_mask[:, 2, indices] = True
@@ -507,7 +510,6 @@ def laman_1N2N(x, extra_info = False):
     # Create indices for the particles, excluding the first two (for i0 and i1)
     indices = torch.arange(2, num_particles)
 
-    # Using broadcasting and advanced indexing to set the desired mask values
     bool_mask[:, 0, indices] = True
     bool_mask[:, 1, indices] = True
     bool_mask[:, 0, 1] = True
@@ -534,9 +536,6 @@ def laman_1N2N(x, extra_info = False):
     bool_mask = bool_mask | bool_mask.transpose(1, 2)
 
     # transform to numpy. That's because we later transform everything on the dataset to pytorch 
-    # TODO: Change this code to work with numpy from the start
-    #bool_mask = bool_mask.numpy() 
-
     bool_mask = bool_mask.cpu()
     
     return bool_mask
@@ -545,19 +544,15 @@ def laman_1N2N(x, extra_info = False):
 # Create a Laman Graph using a mod of the k nearest neighbors algorithm.
 def laman_knn(x, angles = 0, extra_info = False):   
     # check if x is a numpy array, if not convert it to a numpy array
-    #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if isinstance(x, np.ndarray):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         x = torch.from_numpy(x).to(device)
-        #x = torch.from_numpy(x)
     else: 
         device  = x.device
 
     non_zero_particles = torch.norm(x, p=2, dim=1) != 0
     valid_n = non_zero_particles.sum(axis = 1)
 
-    
-    t_start = time.time()
     batch_size, _, num_particles = x.size()
     px, py, pz, energy = x.split((1, 1, 1, 1), dim=1)
 
@@ -565,20 +560,12 @@ def laman_knn(x, angles = 0, extra_info = False):
     phi = torch.atan2(py, px)
     
     x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
-    #print()
-    #print(f'time to calculate padded particles, rapidity and phi = {time.time() - t_start:.3f}')
-    t_pairwise = time.time()
+
     inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
     xx = torch.sum(x ** 2, dim=1, keepdim=True)
     pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
-    #print(f'time to calculate pairwise distance = {time.time() - t_pairwise:.3f}')
-    #print()
-    #print(f'pairwise_distance.device = {pairwise_distance.device}')
-    #print(f'pairwise_distance.shape = {pairwise_distance.shape}')
-    #print()
 
     # Connect the 3 hardest particles in the jet in a triangle 
-    time_triangle = time.time()
     idx_3 = pairwise_distance[:, :3, :3].topk(k=3, dim=-1) # (batch_size, 3, 2)
     idx_3 = [idx_3[0][:,:,1:], idx_3[1][:,:,1:]] # (batch_size, 3, 1)
     
@@ -590,10 +577,7 @@ def laman_knn(x, angles = 0, extra_info = False):
     #print(f'time to create triangle = {time.time() - time_triangle:.3f}')
 
     # Find the indices of the 2 nearest neighbors for each particle
-    time_knn = time.time()
     idx = pairwise_distance.topk(k=2, dim=-1) # It returns two things: values, indices 
-    #print(f'time to calculate knn = {time.time() - time_knn:.3f}')
-    t_idx = time.time()
     idx = idx[1] # (batch_size, num_points - 3, 2)
         
     # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 2 nearest neighbors for the rest of the particles
@@ -601,12 +585,9 @@ def laman_knn(x, angles = 0, extra_info = False):
     
     # add 3 rows of -inf to the top of the pairwise_distance tensor to make it of shape (batch_size, num_particles, num_particles)
     # this is because we remove the 3 hardest particles from the graph and we don't want to connect them to the rest of the particles
-    #print(f'pairwise_distance.device = {pairwise_distance.device}')
     pairwise_distance = torch.cat((torch.ones((batch_size, 3, num_particles), device = device)*float('-inf'), pairwise_distance), dim=1)
-    #print(f'time to create idx = {time.time() - t_idx:.3f}')
 
     # Initialize a boolean mask with False (indicating no connection) for all pairs
-    time_fillbool = time.time()
     bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool).to(device)
     # Efficiently populate the boolean mask based on laman_indices
     for i in range(2):  # Assuming each particle is connected to two others as per laman_indices
@@ -623,9 +604,7 @@ def laman_knn(x, angles = 0, extra_info = False):
     # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
     mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0).to(device)
     bool_mask = bool_mask & mask_upper.unsqueeze(0)
-    #print(f'time to fill bool mask = {time.time() - time_fillbool:.3f}')
 
-    t_memory = time.time()
     # Remove the padded particles from the graph to save memory space when converting to sparse representation.
     range_tensor = torch.arange(num_particles, device = device).unsqueeze(0).unsqueeze(-1)  
     expanded_valid_n = valid_n.unsqueeze(-1).unsqueeze(-1)
@@ -633,25 +612,20 @@ def laman_knn(x, angles = 0, extra_info = False):
     final_mask = mask | mask.transpose(1, 2)
 
     bool_mask = bool_mask & ~final_mask
-    #print(f'time to remove padded particles = {time.time() - t_memory:.3f}')
-    t_end = time.time()
     # Remove some angles at random between the particles. Default value of angles = 0.
-    #bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
+    bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance, extra_info = extra_info)
 
     # Make the Laman Edges bidirectional 
     bool_mask = bool_mask | bool_mask.transpose(1, 2)
 
     # transform to numpy. That's because we later transform everything on the dataset to pytorch 
-    # TODO: Change this code to work with numpy from the start
-    #bool_mask = bool_mask.numpy() 
-
     bool_mask = bool_mask.cpu()
+
     if extra_info:
         # Calculate the Shannon Entropy and the number of connected components
         connected_components(bool_mask, x)
         shannon_entropy(bool_mask, x)
-    #print(f'time to construct laman knn graph = {time.time() - t_start:.3f}')
-    #print()
+
     return bool_mask 
 
 
@@ -711,7 +685,7 @@ def rand_graph(x):
 
 
 
-def unique_graph(x, angles = 0, extra_info = False):
+def unique_graph(x, angles = 0, extra_info = False, num_edges=3):
     # check if x is a numpy array, if not convert it to a numpy array
     if isinstance(x, np.ndarray):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -727,79 +701,70 @@ def unique_graph(x, angles = 0, extra_info = False):
 
     rapidity = 0.5 * torch.log(1 + (2 * pz) / (energy - pz).clamp(min=1e-20))
     phi = torch.atan2(py, px)
-    
+
     x = torch.cat((rapidity, phi), dim=1) # (batch_size, 2, num_points)
 
     inner = -2 * torch.matmul(x.transpose(2, 1), x)                                    # x.transpose(2, 1): flips the last two dimensions
     xx = torch.sum(x ** 2, dim=1, keepdim=True)
     pairwise_distance = -xx - inner - xx.transpose(2, 1)                               # (batch_size, num_points, num_points)
 
-    # Connect the 4 hardest particles in the jet in a fully connected graph
-    idx_3 = pairwise_distance[:, :4, :4].topk(k=4, dim=-1) # (batch_size, 3, 2)
-    idx_3 = [idx_3[0][:,:,1:], idx_3[1][:,:,1:]] # (batch_size, 3, 1)
+    k = num_edges  # number of edges to connect per particle
 
-    # Connect the rest of the particles in a Henneberg construction: Connect the i-th hardest particle with the 2 closest particles, i_1 and i_2, where i_1,2 < j  
-    pairwise_distance = pairwise_distance[:, 4:, :] # Remove the pairwise distances of 3 hardest particles from the distance matrix 
-    
-    # Make the upper right triangle of the distance matrix infinite so that we don't connect the i-th particle with the j-th particle if i > j 
-    pairwise_distance = torch.tril(pairwise_distance, diagonal=3) - torch.triu(torch.ones_like(pairwise_distance)*float('inf'), diagonal=4)  # -inf because topk indices return the biggest values -> we've made all distances negative 
+    # ===== Connect the k hardest particles in the jet =====
+    # For the k hardest particles, take top-(k+1) entries along the last dimension, so that after removing self-connection we have k edges.
+    idx_hard = pairwise_distance[:, :k+1, :k+1].topk(k=k+1, dim=-1)  # shape: (batch_size, k, k+1)
+    # Remove the self connection (assumed to be the first index)
+    idx_hard = [idx_hard[0][:, :, 1:], idx_hard[1][:, :, 1:]]  # each now (batch_size, k, k)
 
-    # Find the indices of the 3 nearest neighbors for each particle
-        
-    idx = pairwise_distance.topk(k=3, dim=-1) # It returns two things: values, indices 
-    idx = idx[1] # (batch_size, num_points - 3, 2)
+    # ===== Process the remaining particles =====
+    # Remove the k hardest particles from the distance matrix
+    pairwise_distance = pairwise_distance[:, k+1:, :]  # shape: (batch_size, num_particles - k, num_particles)
+    # Mask the upper triangle: we want to connect each remaining particle with its k nearest neighbors.
+    pairwise_distance = torch.tril(pairwise_distance, diagonal=k) - \
+                        torch.triu(torch.ones_like(pairwise_distance) * float('inf'), diagonal=k+1)
+    # For the remaining particles, select the top k nearest neighbors
+    idx_rest = pairwise_distance.topk(k=k, dim=-1)[1]  # shape: (batch_size, num_particles - k, k)
 
-    # Concatenate idx and idx_3 to get the indices of the 3 hardest particles and the 3 nearest neighbors for the rest of the particles
-    idx = torch.cat((idx_3[1], idx), dim=1) # (batch_size, num_points, 3)
+    # ===== Concatenate indices =====
+    idx_full = torch.cat((idx_hard[1], idx_rest), dim=1)  # shape: (batch_size, num_particles, k)
 
-    # add 3 rows of -inf to the top of the pairwise_distance tensor to make it of shape (batch_size, num_particles, num_particles)
-    # this is because we remove the 3 hardest particles from the graph and we don't want to connect them to the rest of the particles
-    #print(f'pairwise_distance.device = {pairwise_distance.device}')
-    pairwise_distance = torch.cat((torch.ones((batch_size, 3, num_particles), device = device)*float('-inf'), pairwise_distance), dim=1)
+    # Prepend k rows of -inf to pairwise_distance to recover shape (batch_size, num_particles, num_particles)
+    pad = torch.ones((batch_size, k, num_particles), device=device) * float('-inf')
+    pairwise_distance = torch.cat((pad, pairwise_distance), dim=1)
 
-    # Initialize a boolean mask with False (indicating no connection) for all pairs
+    # ===== Build the boolean mask for graph connections =====
     bool_mask = torch.zeros((batch_size, num_particles, num_particles), dtype=torch.bool).to(device)
-
-    # Efficiently populate the boolean mask based on laman_indices
-    for i in range(3):  # Assuming each particle is connected to two others as per laman_indices
-        # Extract the current set of indices indicating connections
-        current_indices = idx[:, :, i]
-
-        # Generate a batch and source particle indices to accompany current_indices for scatter_
+    # Populate the mask: for each particle, add k edges using the indices from idx_full
+    for i in range(k):
+        current_indices = idx_full[:, :, i]  # shape: (batch_size, num_particles)
         batch_indices = torch.arange(batch_size).view(-1, 1).expand(-1, num_particles)
         src_particle_indices = torch.arange(num_particles).expand(batch_size, -1)
-
-        # Use scatter_ to update the bool_mask; setting the connection locations to True
         bool_mask[batch_indices, src_particle_indices, current_indices] = True
 
-    # ensure that the adjacency matrix is lower diagonal, useful for when we add angles later at random, to keep track of the connections we remove/already have
+    # Make adjacency matrix lower triangular
     mask_upper = ~torch.triu(torch.ones(num_particles, num_particles, dtype=torch.bool), diagonal=0).to(device)
     bool_mask = bool_mask & mask_upper.unsqueeze(0)
 
-    # Remove the padded particles from the graph to save memory space when converting to sparse representation.
-    range_tensor = torch.arange(num_particles, device = device).unsqueeze(0).unsqueeze(-1)  
+    # Remove padded particles to save memory in sparse representation
+    range_tensor = torch.arange(num_particles, device=device).unsqueeze(0).unsqueeze(-1)
     expanded_valid_n = valid_n.unsqueeze(-1).unsqueeze(-1)
     mask = (range_tensor >= expanded_valid_n).to(device)
     final_mask = mask | mask.transpose(1, 2)
-
     bool_mask = bool_mask & ~final_mask
 
-    # Remove some angles at random between the particles. Default value of angles = 0.
-    bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance = pairwise_distance) 
+    # Call the angles_laman function (if defined) to remove some angles at random, if desired
+    bool_mask = angles_laman(x, bool_mask, angles, pairwise_distance=pairwise_distance, extra_info=extra_info)
 
-    # Make the Laman Edges bidirectional 
+
+    # Make edges bidirectional
     bool_mask = bool_mask | bool_mask.transpose(1, 2)
-
-    # transform to numpy. That's because we later transform everything on the dataset to pytorch 
-    # TODO: Change this code to work with numpy from the start
-    #bool_mask = bool_mask.numpy() 
-    bool_mask = bool_mask.cpu()
 
     if extra_info:
         # Calculate the number of connected components
-        connected_components(bool_mask, x)
+        connected_components(bool_mask.cpu(), x)
 
-    return bool_mask 
+    return bool_mask.cpu()
+ 
 
 
 def split_into_batches(tensor, batch_size):
@@ -1005,7 +970,7 @@ class ParT():
             print('Total memory usage of particle features + Y values: ', memory_usage, 'MB')
 
 
-        if  graph_train is not None and self.set_ddp:
+        if graph_train is not None and self.set_ddp:
             sparse_matrices = [csr_matrix(graph_train[i]) for i in range(graph_train.shape[0])]
             graph_train = sparse_matrices 
             sparse_matrices = [csr_matrix(graph_val[i]) for i in range(graph_val.shape[0])]
@@ -1056,8 +1021,9 @@ class ParT():
         if self.graph_transformer:
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long(), torch.from_numpy(graph_train).bool()  )
             self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
-
+            #train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, sampler=self.train_sampler, num_workers=8, pin_memory=True)
+            
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long(), torch.from_numpy(graph_val).bool() )
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
             
@@ -1067,8 +1033,9 @@ class ParT():
         else: 
             train_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_train).float(), torch.from_numpy(Y_ParT_train).long())
             self.train_sampler = DistributedSampler(train_dataset) if self.set_ddp else None
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
-
+            #train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = self.batch_size, sampler = self.train_sampler, num_workers = 4)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, sampler=self.train_sampler, num_workers=8, pin_memory=True)
+            
             val_dataset = torch.utils.data.TensorDataset(torch.from_numpy(features_val).float(), torch.from_numpy(Y_ParT_val).long())
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size = self.batch_size, num_workers = 4)
             
@@ -1223,8 +1190,9 @@ class ParT():
                     graph = np.concatenate([knn(X[i * chunk_size:(i + 1) * chunk_size], k = k, extra_info=True if i==0 else False) for i in range(chunks)] )
                 
                 elif self.graph_type == 'unique_graph':
-                    graph = torch.cat([unique_graph(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False) for i in range(chunks)] )
-                    print('here')
+                    print('Constructing a Unique Graph using a mod of the k nearest neighbors algorithm.')
+                    num_edges = self.model_info['model_settings']['num_edges']
+                    graph = torch.cat([unique_graph(X[i * chunk_size:(i + 1) * chunk_size], angles = self.add_angles, extra_info=True if i==0 else False, num_edges = num_edges) for i in range(chunks)] )
                 
                 elif self.graph_type == 'unique_1N2N3N':
                     graph = torch.cat([unique_1N2N3N(X[i * chunk_size:(i + 1) * chunk_size], extra_info=False if i==0 else False) for i in range(chunks)] )
@@ -1246,6 +1214,7 @@ class ParT():
             (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test) = energyflow.utils.data_split(X, Y,
                                                                                                                                val=self.n_val, test=self.n_test)
             return (features_train, features_val, features_test, Y_ParT_train, Y_ParT_val, Y_ParT_test)
+        
     #---------------------------------------------------------------
     def init_model(self):
         '''
@@ -1253,7 +1222,12 @@ class ParT():
         '''
 
         # Define the model 
-        model = ParticleTransformer.ParticleTransformer(input_dim = self.input_dim, num_classes = 2, pair_input_dim = self.pair_input_dim) # 4 features: (px, py, pz, E)
+        self.use_amp = True 
+        model = ParticleTransformer.ParticleTransformer(input_dim = self.input_dim, num_classes = 2, 
+                                                        pair_input_dim = self.pair_input_dim,                 # 4 features: (px, py, pz, E)
+                                                        num_layers = 8,
+                                                        ffn_ratio = 4,
+                                                        )
 
         model = model.to(self.torch_device)
         #model = torch.compile(model)
@@ -1263,6 +1237,7 @@ class ParT():
             print()
             print(model)
             print(f'Total number of parameters: {sum(p.numel() for p in model.parameters())}')
+            print(f'using half precision: {self.use_amp}')
             print()
 
         if self.load_model:
@@ -1282,10 +1257,27 @@ class ParT():
         time_start = time.time()
 
         criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr = self.learning_rate)
+        self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=self.learning_rate,  # Initial learning rate (use a smaller value, e.g., 1e-4 or 5e-5)
+                weight_decay=0.01)  # Regularization to reduce overfitting
 
-        best_auc_test = 0
-        best_auc_val, best_roc_val = None, None 
+        start_lr_div = 10
+        end_lr_div = 5
+        num_training_steps = len(self.train_loader) * self.epochs
+        num_warmup_steps = int(0.1 * num_training_steps)  # Warmup for 10% of training steps
+
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                self.optimizer,
+                max_lr=self.learning_rate,  # Peak learning rate during warmup
+                total_steps=num_training_steps,
+                anneal_strategy='linear',  # Linearly decay the learning rate after warmup
+                pct_start=num_warmup_steps / num_training_steps,  # Proportion of warmup steps
+                div_factor=start_lr_div,  # Initial LR is 1/10th of max_lr
+                final_div_factor= end_lr_div ) # Final LR is 1/5th of max_lr
+        self.scaler = amp.GradScaler(enabled=self.use_amp)
+
+        best_auc_test, best_auc_val, best_roc_val = 0, 0, None 
         
         if self.set_ddp:
             torch.cuda.set_device(self.local_rank)
@@ -1299,11 +1291,11 @@ class ParT():
             if self.set_ddp: self.train_sampler.set_epoch(epoch)  
 
             t_start = time.time()
-            loss = self._train_part(self.train_loader, self.model, optimizer, criterion, graph_transformer = self.graph_transformer)
+            loss = self._train_part(self.train_loader, self.model, criterion, graph_transformer = self.graph_transformer)
             auc_test, acc_test, roc_test = self._test_part(self.test_loader, self.model, graph_transformer = self.graph_transformer)
             auc_val, acc_val, roc_val = self._test_part(self.val_loader, self.model, graph_transformer = self.graph_transformer)
             # Save the model with the best test AUC
-            if auc_test > best_auc_test:
+            if auc_val > best_auc_val:
                 best_auc_test = auc_test
                 best_auc_val = auc_val
                 best_roc_val = roc_val
@@ -1313,14 +1305,11 @@ class ParT():
             # only print if its the main process
             if self.local_rank == 0:
                 print("--------------------------------")
-                print(f'time for training the epoch = {time.time() - t_start:.4f} seconds')
-                
-
-                if (epoch)%5 == 0:
+                if (epoch)%10 == -1:
                     auc_train, acc_train, roc_train = self._test_part(self.train_loader, self.model, graph_transformer = self.graph_transformer)
-                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Train Acc: {acc_train:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Auc_train: {auc_train:.4f}, Val AUC: {auc_val:.4f}, Test AUC: {auc_test:.4f}, lr: {self.optimizer.param_groups[0]["lr"]:.5f}, time: {time.time() - t_start:.2f} seconds')
                 else:
-                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val Acc: {acc_val:.4f}, Val AUC: {auc_val:.4f}, Test Acc: {acc_test:.4f}, Test AUC: {auc_test:.4f}')
+                    print(f'Epoch: {epoch:02d}, Loss: {loss:.4f}, Val AUC: {auc_val:.4f}, Test AUC: {auc_test:.4f}, lr: {self.optimizer.param_groups[0]["lr"]:.5f}, time: {time.time() - t_start:.2f} seconds')
 
         time_end = time.time()
         if self.local_rank == 0:
@@ -1328,64 +1317,66 @@ class ParT():
             print()
             print(f"Time to train model for 1 epoch = {(time_end - time_start)/self.epochs:.1f} seconds")
             print(f'trim_particles: {self.model_info["model_settings"]["trim_particles"]}')
-            print(f"Best AUC on the test set = {best_auc_test:.4f}")
             print(f"Corresponding AUC on the validation set = {best_auc_val:.4f}")
+            print(f"Corresponding AUC on the test set = {best_auc_test:.4f}")
             print()
             if self.save_model:
                 path = f'/global/homes/d/dimathan/GNNs-and-Jets/Saved_Model_weights/{self.model_info["model_key"]}_p{self.input_dim}_{self.pair_input_dim}.pth'
                 print(f"Saving model to {path}")
                 torch.save(best_model_params, path) 
-   
+        
+        # kill the process group if using DDP, with a barrier to synchro nize all processes
+        if self.set_ddp and dist.is_initialized(): 
+            dist.barrier()
+            dist.destroy_process_group()
+            if self.local_rank == 0:
+                print("Process group destroyed.")
+            
         return best_auc_val, best_roc_val
 
         
     #---------------------------------------------------------------
-    def _train_part(self, train_loader, model, optimizer, criterion, graph_transformer = False):
+    def _train_part(self, train_loader, model, criterion, graph_transformer = False):
 
 
-        model.train()             # Set model to training mode. This is necessary for dropout, batchnorm etc layers 
-                                  # that behave differently in training mode vs eval mode (which is the default)
-                                  # We need to include this since we have particlenet.eval() in the test_particlenet function
-        
-        loss_cum = 0              # Cumulative loss
+        model.train()  # Set model to training mode
+        loss_cum = 0  # Cumulative loss
+
         for index, data in enumerate(train_loader):
-
             inputs, labels = data[0], data[1]
             inputs = inputs.to(self.torch_device)
-            labels = labels.to(self.torch_device) 
-            
+            labels = labels.to(self.torch_device)
+
             if graph_transformer:
                 graph = data[2].to(self.torch_device)
-            else: 
+            else:
                 graph = None
-            
 
-            # zero the parameter gradients
-            optimizer.zero_grad()
+            # Zero the parameter gradients
+            self.optimizer.zero_grad()
 
+            # Prepare input: create pt if needed
             if self.input_dim == 1:
-                # create pt of each particle instead of (px, py, pz, E) for the input 
                 pt, _, _ = to_ptrapphim(inputs).split((1, 1, 1), dim=1)
                 x = pt
-
-            elif self.input_dim == 3: 
+            elif self.input_dim == 3:
                 p3 = to_ptrapphim(inputs)
-                x = p3 
-
+                x = p3
             else:
                 x = inputs
 
-            # forward + backward + optimize
-            outputs = model(x = x, v = inputs, graph = graph)
-            
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            # Forward, loss computation, backward pass and optimization using AMP
+            with amp.autocast(device_type='cuda', enabled=self.use_amp):
+                outputs = model(x=x, v=inputs, graph=graph)
+                loss = criterion(outputs, labels)
+
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.scheduler.step()
 
             loss_cum += loss.item()
-            # Cache management
-            torch.cuda.empty_cache()
-            
+     
         return loss_cum
 
 

@@ -101,6 +101,7 @@ class SteerAnalysis(common_base.CommonBase):
 
             else: # for particle_net and transformer the graph structure is dynamically generated at each layer which dominates the training time.
                 continue
+            
         # Perform ML analysis, and write results to file
         if self.rank == 0:
             print()
@@ -120,6 +121,7 @@ class SteerAnalysis(common_base.CommonBase):
             plot = plot_results.PlotResults(self.config_file, self.output_dir)
             plot.plot_results()
             print('--- {} minutes ---'.format((time.time() - start_time)/60.))
+
 
 ####################################################################################################################
 if __name__ == '__main__':

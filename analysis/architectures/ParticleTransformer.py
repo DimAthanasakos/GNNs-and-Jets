@@ -460,7 +460,7 @@ class Block(nn.Module):
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
 
-        if x_cls is not None:
+        if x_cls is not None: # this is used for the class-attention block
             with torch.no_grad():
                 # prepend one element for x_cls: -> (batch, 1+seq_len)
                 padding_mask = torch.cat((torch.zeros_like(padding_mask[:, :1]), padding_mask), dim=1)
@@ -469,16 +469,18 @@ class Block(nn.Module):
             u = torch.cat((x_cls, x), dim=0)  # (seq_len+1, batch, embed_dim)
             u = self.pre_attn_norm(u)
             x = self.attn(x_cls, u, u, key_padding_mask=padding_mask)[0]  # (1, batch, embed_dim)
-        else:
+        else:                 # this is used for the particle-attention block
             residual = x
             x = self.pre_attn_norm(x)
+            # After computing/obtaining key_padding_mask and attn_mask
+            if padding_mask is not None and attn_mask is not None and padding_mask.dtype != attn_mask.dtype:
+                padding_mask = padding_mask.to(attn_mask.dtype)           
+
             x, weights = self.attn(x, x, x, key_padding_mask=padding_mask,
-                          attn_mask=attn_mask)  # (seq_len, batch, embed_dim). By default it returnes the attention weights as well 
+                          attn_mask=attn_mask)  # (seq_len, batch, embed_dim). By default it returns the attention weights as well 
             
-            # Pytorch throws a warning here which I suspect is relevant to: https://github.com/pytorch/pytorch/issues/95702 
-            # It looks like a bug of pytorch 2.x 
-            # TODO: Address this or hope that it's resolved in the next version of pytorch
             warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask and attn_mask is deprecated.*")
+
 
         if self.c_attn is not None:
             tgt_len = x.size(0)
@@ -525,21 +527,20 @@ class ParticleTransformer(nn.Module):
                  cls_block_params={'dropout': 0, 'attn_dropout': 0, 'activation_dropout': 0},
                  fc_params=[],   # check this in relation to the cls token 
                  activation='gelu',
+                 ffn_ratio=4,
                  # misc
                  trim=False,  
                  for_inference=False,
-                 use_amp=False,
                  **kwargs) -> None:
         super().__init__(**kwargs)
 
         self.trimmer = SequenceTrimmer(enabled=trim and not for_inference) # Since we do not provide a mask, what this does is to permute the input (x, v, graph)
                                                                            # which in principle leads to better generalization.
         self.for_inference = for_inference
-        self.use_amp = use_amp
         self.num_heads = num_heads
 
         embed_dim = embed_dims[-1] if len(embed_dims) > 0 else input_dim
-        default_cfg = dict(embed_dim=embed_dim, num_heads=num_heads, ffn_ratio=4,
+        default_cfg = dict(embed_dim=embed_dim, num_heads=num_heads, ffn_ratio=ffn_ratio,
                            dropout=0.1, attn_dropout=0.1, activation_dropout=0.1,
                            add_bias_kv=False, activation=activation,
                            scale_fc=True, scale_attn=True, scale_heads=True, scale_resids=True)
@@ -567,6 +568,7 @@ class ParticleTransformer(nn.Module):
             pair_input_dim, pair_extra_dim, pair_embed_dims + [cfg_block['num_heads']],
             remove_self_pair=remove_self_pair, use_pre_activation_pair=use_pre_activation_pair,
             for_onnx=for_inference) if pair_embed_dims is not None and pair_input_dim + pair_extra_dim > 0 else None
+        
         self.blocks = nn.ModuleList([Block(**cfg_block) for _ in range(num_layers)])
         self.cls_blocks = nn.ModuleList([Block(**cfg_cls_block) for _ in range(num_cls_layers)])
         self.norm = nn.LayerNorm(embed_dim)
@@ -605,47 +607,43 @@ class ParticleTransformer(nn.Module):
             x, v, mask, uu, graph = self.trimmer(x, v, mask, uu, graph)            # 
             padding_mask = ~mask.squeeze(1)                          # (N, P) and padded = 1, real particle = 0 now due to ~ (bitwise not)
 
-        with torch.cuda.amp.autocast(enabled=self.use_amp): # if true it lowers the precision of some computations to half precision for faster computation
-                                                            # The default for self.use_amp = False
+        # input embedding 
+        x = self.embed(x).masked_fill(~mask.permute(2, 0, 1), 0)  # (P, N, C)  # masked_fill: fill the elements of x with 0 where mask is False
+                                                                    # mask.permute(2, 0, 1) -> (P, N, 1)
+        
+        # pair embedding to get the interaction terms between pairs of particles -> Acts as the bias in the attention layer of the particle attn block.
 
-            # input embedding 
-            x = self.embed(x).masked_fill(~mask.permute(2, 0, 1), 0)  # (P, N, C)  # masked_fill: fill the elements of x with 0 where mask is False
-                                                                      # mask.permute(2, 0, 1) -> (P, N, 1)
-          
-            # pair embedding to get the interaction terms between pairs of particles -> Acts as the bias in the attention layer of the particle attn block.
+        attn_mask = None
+        if (v is not None or uu is not None) and self.pair_embed is not None:
+            attn_mask = self.pair_embed(v, uu).view(-1, v.size(-1), v.size(-1))  # (N*num_heads, P, P)
+        
+        # filter the attn_mask with the graph that was constructed in models.ParticleTransformer. Otherwise, full transformer is used.
+        if graph is not None:
+            bool_mask =  graph.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, 
+                                                                                    num_particles, num_particles)
+                
+            attn_mask = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype))
 
-            attn_mask = None
-            if (v is not None or uu is not None) and self.pair_embed is not None:
-                attn_mask = self.pair_embed(v, uu).view(-1, v.size(-1), v.size(-1))  # (N*num_heads, P, P)
-            
-            # filter the attn_mask with the graph that was constructed in models.ParticleTransformer. Otherwise, full transformer is used.
-            if graph is not None:
-                t_s = time.time()
-                bool_mask =  graph.unsqueeze(1).repeat(1, self.num_heads, 1, 1).reshape(batch_size*self.num_heads, 
-                                                                                        num_particles, num_particles).to(attn_mask.device)
-                   
-                attn_mask = torch.where(bool_mask, attn_mask, torch.tensor(0).to(attn_mask.dtype).to(attn_mask.device))
-                #print(f"Time for filtering attn_mask: {time.time() - t_s}")
-            # transform
-            for block in self.blocks:
-                x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask = attn_mask)
+        # transform
+        for block in self.blocks:
+            x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask = attn_mask)
 
-            #print(f'x.shape: {x.shape}')
-            # extract class token
-            cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
+        #print(f'x.shape: {x.shape}')
+        # extract class token
+        cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
+        #print(f'cls_tokens.shape: {cls_tokens.shape}')
+        for block in self.cls_blocks:
+            cls_tokens = block(x, x_cls=cls_tokens, padding_mask=padding_mask)
             #print(f'cls_tokens.shape: {cls_tokens.shape}')
-            for block in self.cls_blocks:
-                cls_tokens = block(x, x_cls=cls_tokens, padding_mask=padding_mask)
-                #print(f'cls_tokens.shape: {cls_tokens.shape}')
-            x_cls = self.norm(cls_tokens).squeeze(0)
-            #print(f'x_cls.shape: {x_cls.shape}')
-            #print()
-            # fc
-            if self.fc is None:
-                return x_cls
-            output = self.fc(x_cls)
-            if self.for_inference:
-                output = torch.softmax(output, dim=1)
-            # print('output:\n', output)
-            #print(f"forward pass time: {time.time() - t_for}")
-            return output
+        x_cls = self.norm(cls_tokens).squeeze(0)
+        #print(f'x_cls.shape: {x_cls.shape}')
+        #print()
+        # fc
+        if self.fc is None:
+            return x_cls
+        output = self.fc(x_cls)
+        if self.for_inference:
+            output = torch.softmax(output, dim=1)
+        # print('output:\n', output)
+        #print(f"forward pass time: {time.time() - t_for}")
+        return output

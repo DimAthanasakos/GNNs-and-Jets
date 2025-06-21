@@ -82,7 +82,7 @@ class Process(common_base.CommonBase):
         for key,value in self.output.items():
             self.output_numpy[key] = self.transform_to_numpy(value)
 
-        # Currently this is very sketchy and not modular. It should be improved. I apologize to anyone trying to understand this.
+        # Currently this is very sketchy and not modular. It should be improved. I apologize to anyone trying to understand this. Its me from the future: This is a mess.
         # we've now filled the subjets and nsubjettiness into self.output. We can now calculate the nsubs on the clustered jets (subjets and not hadrons) 
         for N_cluster in self.N_cluster_list:
             x_subjet_input = []
@@ -374,6 +374,6 @@ class Process(common_base.CommonBase):
 if __name__ == '__main__':
     # Path to store the nsubs file. Be careful with overwriting.
     
-    dir = '/pscratch/sd/d/dimathan/GNN/exclusive_subjets_TvsQCD_500k_N506080100'
-    Process(dir, n_total = 500000, N_cluster_list = [50, 60, 80, 100], K = 21, classification_task = 'TvsQCD')
+    dir = '/pscratch/sd/d/dimathan/GNN/test'
+    Process(dir, n_total = 5000, N_cluster_list = [100], K = 21, classification_task = 'qvsg')
     print('done')

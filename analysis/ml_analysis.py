@@ -11,17 +11,23 @@ import pickle
 from collections import defaultdict
 import numpy as np
 import torch
+torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.benchmark = True # for performance. It benchmarks the input sizes and selects the optimal set of algorithms for the hardware
+
+import torch.profiler
 
 sys.path.append('.')
 from base import common_base
 import data_IO
 from analysis.models import gnn_pytorch, particle_net, particle_transformer, nsub_trans, nsub_dnn, subjet_transformer, subjet_nsub_dnn, subjet_nsub_trans, efp
 
+#set a seed for reproducibility
+#torch.manual_seed(0)
 
 ################################################################
 class MLAnalysis(common_base.CommonBase):
 
-    #---------------------------------------------------------------
+    #---------------------------------------------------------------x
     # Constructor
     #---------------------------------------------------------------
     def __init__(self, config_file='', output_dir='', gpu_mode='single', **kwargs):
@@ -78,6 +84,7 @@ class MLAnalysis(common_base.CommonBase):
         for model in self.models:
             self.model_settings[model] = config[model]
             
+
     #---------------------------------------------------------------
     # Train models
     #---------------------------------------------------------------
