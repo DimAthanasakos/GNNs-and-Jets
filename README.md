@@ -1,5 +1,5 @@
 # GNNs-and-Jets
-Use of GNNs and Transformers for Jet Classification. Ongoing work.
+Use of GNNs and Transformers for Jet Classification in the paper: "Graph theory inspired anomaly detection at the LHC" 
 
 
 ## Training the GNNs
